@@ -1,0 +1,8 @@
+# OS
+.DS_Store
+
+# Claude Code local config
+.claude/
+
+# Nested git repo — managed separately at github.com/Nacar11/asima-backend
+asima-backend/
