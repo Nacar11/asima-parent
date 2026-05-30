@@ -91,15 +91,68 @@ follows this contract on both sides of the wire:
 - Bearer JWT auth. Access token 15m, refresh token 7d with rotation on
   `/auth/refresh`. Logout is stateless (client drops tokens).
 
+## Plans and todos — `tasks/` vs `docs/plans/`
+
+Every project root in this repo (parent, backend, frontend) follows the
+same convention for plan + todo files:
+
+| Location | Tracked? | Role | Lifetime |
+|---|---|---|---|
+| `tasks/plan.md` | **Gitignored** | The currently-active plan for the feature being worked on right now. Contents change every time the active feature changes. | Mutable working file |
+| `tasks/todo.md` | **Gitignored** | The currently-active checklist. Same file pair as `tasks/plan.md`. | Mutable working file |
+| `docs/plans/YYYY-MM-DD-<slug>.md` | **Committed** | Audit snapshot of the plan as it was at the time the feature started. Permanent record. | Frozen at write time |
+| `docs/plans/YYYY-MM-DD-<slug>-todo.md` | **Committed** | Audit snapshot of the todo. | Frozen at write time |
+
+**The workflow when starting a new major feature:**
+
+1. Write the plan + todo as `docs/plans/YYYY-MM-DD-<slug>.md` and
+   `docs/plans/YYYY-MM-DD-<slug>-todo.md`. Commit them — this is the
+   audit trail.
+2. Copy both files to `tasks/plan.md` and `tasks/todo.md`. These
+   become the working files. They're gitignored, so day-to-day edits
+   don't pollute git history.
+3. As work progresses, edit `tasks/plan.md` and `tasks/todo.md`
+   freely. Tick boxes, add notes, revise estimates.
+4. If a plan revision is significant enough to need a record (a
+   pivot, a new phase, a reversed decision), update the
+   `docs/plans/` snapshot too and commit.
+5. When the feature ships, the `docs/plans/` files remain as the
+   historical record of what was planned and why. The `tasks/` files
+   get overwritten by the next feature's plan.
+
+**Why this shape:** `tasks/` is a *workspace*, not a *record*.
+Committing every checkbox tick would bury PR diffs in noise. But
+forgetting why a decision was made six months later is its own pain.
+The `docs/plans/` snapshot solves both — it's what we agreed to do at
+the start; the `tasks/` file is how we're doing it now.
+
+**Conventions:**
+
+- `docs/plans/` filenames MUST start with `YYYY-MM-DD-`
+  (e.g. `2026-05-30-leave-correction-and-approval-chains.md`).
+- The `tasks/` file pair has only the two canonical names:
+  `tasks/plan.md` and `tasks/todo.md`. No date prefix; the active
+  feature is whichever one is in those files right now.
+- The Claude Code planning skill defaults to `tasks/plan.md` /
+  `tasks/todo.md` — this convention aligns with that default and
+  adds the audit copy in `docs/plans/`.
+
 ## Where authoritative docs live
 
-- `asima-backend/tasks/plan.md` — current implementation plan and phase
-  checkpoints. Source of truth for what's built vs. coming.
-- `asima-backend/tasks/todo.md` — active work items.
+- **Active plan** for whatever feature is in flight:
+  - Parent (cross-cutting features): `asima-parent/tasks/plan.md` + `tasks/todo.md`.
+  - Backend-only: `asima-backend/tasks/plan.md` + `tasks/todo.md`.
+  - Frontend-only: `asima-frontend/tasks/plan.md` + `tasks/todo.md`.
+- **Historical plans**: `docs/plans/YYYY-MM-DD-*.md` at the appropriate root.
 - `asima-backend/docs/adr/` — architectural decisions. Read the relevant
   ADR before changing the area it covers.
-- `asima-backend/module-architecture.md` — hexagonal layering blueprint
-  every backend module follows.
+- `asima-parent/docs/universal-guidelines/module-architecture.md` —
+  hexagonal layering blueprint every backend module follows.
+- `asima-parent/docs/universal-guidelines/frontend-stack.md` —
+  authoritative stack table; one source per layer.
+- `asima-parent/docs/universal-guidelines/frontend-component-blueprint.md`
+  — prompt-context rules for creating any frontend component
+  (shadcn-only, no parallel UI sources).
 - `asima-backend/reference/` — exemplar code (categories module) used as a
   pattern reference. Not shipping code; don't import from it.
 
