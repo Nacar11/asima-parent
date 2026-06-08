@@ -148,6 +148,9 @@ the start; the `tasks/` file is how we're doing it now.
   ADR before changing the area it covers.
 - `asima-parent/docs/universal-guidelines/module-architecture.md` —
   hexagonal layering blueprint every backend module follows.
+- `asima-parent/docs/universal-guidelines/database-migration-conventions.md`
+  — one table = one CREATE migration; edit CREATE (not a new ALTER) while a
+  table's migration is still unreleased.
 - `asima-parent/docs/universal-guidelines/frontend-stack.md` —
   authoritative stack table; one source per layer.
 - `asima-parent/docs/universal-guidelines/frontend-component-blueprint.md`
@@ -167,3 +170,18 @@ the start; the `tasks/` file is how we're doing it now.
   (domain → persistence → service → controller) must move together. A
   half-landed slice (entity without mapper, controller without DTO) is
   worse than no change.
+
+## Git workflow
+
+- **Commit straight to `main` and push.** Do NOT create feature branches or
+  open PRs unless the user explicitly asks for one in that request. The
+  default for every change — in `asima-parent`, `asima-backend`, and
+  `asima-frontend` — is: make the change on `main`, commit, `git push origin
+  main`. (This overrides the usual "branch first if on the default branch"
+  default.)
+- Still **verify before pushing**: run the repo's lint / test / build (and
+  `npm ci` if a lock file changed) and only push when they pass. Direct-to-main
+  doesn't mean skipping the checks — it means skipping the branch + PR ceremony.
+- Each repo has its own `origin` and its own `main`; push to the one whose
+  files changed. Keep commits scoped to one concern even when several land in
+  the same session.
