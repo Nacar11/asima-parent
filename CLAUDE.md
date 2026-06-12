@@ -99,18 +99,17 @@ same convention for plan + todo files:
 | Location | Tracked? | Role | Lifetime |
 |---|---|---|---|
 | `tasks/plan.md` | **Gitignored** | The currently-active plan for the feature being worked on right now. Contents change every time the active feature changes. | Mutable working file |
-| `tasks/todo.md` | **Gitignored** | The currently-active checklist. Same file pair as `tasks/plan.md`. | Mutable working file |
+| `tasks/todo.md` | **Gitignored** | The currently-active checklist. Same file pair as `tasks/plan.md`. **The todo lives ONLY here** — never committed to `docs/plans/`. | Mutable working file |
 | `docs/plans/YYYY-MM-DD-<slug>.md` | **Committed** | Audit snapshot of the plan as it was at the time the feature started. Permanent record. | Frozen at write time |
-| `docs/plans/YYYY-MM-DD-<slug>-todo.md` | **Committed** | Audit snapshot of the todo. | Frozen at write time |
 
 **The workflow when starting a new major feature:**
 
-1. Write the plan + todo as `docs/plans/YYYY-MM-DD-<slug>.md` and
-   `docs/plans/YYYY-MM-DD-<slug>-todo.md`. Commit them — this is the
-   audit trail.
-2. Copy both files to `tasks/plan.md` and `tasks/todo.md`. These
-   become the working files. They're gitignored, so day-to-day edits
-   don't pollute git history.
+1. Write the plan as `docs/plans/YYYY-MM-DD-<slug>.md` and commit it —
+   this is the audit trail. **Do NOT create a committed
+   `docs/plans/...-todo.md`; the todo is a working file only.**
+2. Copy the plan to `tasks/plan.md` and write the checklist to
+   `tasks/todo.md`. These are the working files. They're gitignored, so
+   day-to-day edits don't pollute git history.
 3. As work progresses, edit `tasks/plan.md` and `tasks/todo.md`
    freely. Tick boxes, add notes, revise estimates.
 4. If a plan revision is significant enough to need a record (a
@@ -121,10 +120,11 @@ same convention for plan + todo files:
    get overwritten by the next feature's plan.
 
 **Why this shape:** `tasks/` is a *workspace*, not a *record*.
-Committing every checkbox tick would bury PR diffs in noise. But
-forgetting why a decision was made six months later is its own pain.
-The `docs/plans/` snapshot solves both — it's what we agreed to do at
-the start; the `tasks/` file is how we're doing it now.
+Committing every checkbox tick would bury PR diffs in noise — which is
+exactly why the todo is never committed. But forgetting why a decision
+was made six months later is its own pain. The `docs/plans/` **plan**
+snapshot solves that — it's what we agreed to do at the start; the
+`tasks/` files are how we're doing it now.
 
 **Conventions:**
 
