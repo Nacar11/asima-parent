@@ -55,7 +55,8 @@ src/storage/
 ├── s3-storage.service.ts         # @aws-sdk/client-s3 impl (MinIO + AWS)
 ├── image-processor.service.ts    # sharp → { original, preview, thumbnail } buffers
 ├── file-validation.ts            # magic-byte sniff + size guard (pure)
-└── storage.module.ts             # binds Base→S3, exports the port + helpers
+├── attachment.service.ts         # orchestrator: validate→process→upload→persist row
+└── storage.module.ts             # binds Base→S3, exports the port + AttachmentService
 ```
 
 - **`file-validation`** inspects real magic bytes (not the client-sent MIME) for
@@ -63,11 +64,19 @@ src/storage/
   `STORAGE_MAX_FILE_MB` (default 10).
 - **`image-processor`** (sharp): `original` (as-uploaded bytes, unmodified),
   `preview` (≤1600px long edge, WebP, quality-optimized), `thumbnail`
-  (≤256px long edge, WebP). PDFs skip this — `original` only.
+  (≤256px long edge, WebP). PDFs skip this — `original` only. Sharp is
+  configured with `limitInputPixels` to cap decoded dimensions, so a crafted
+  "image bomb" can't exhaust memory even within the byte-size cap.
 - **`s3-storage`** uses `PutObjectCommand` / `GetObjectCommand` /
   `DeleteObjectCommand` / `HeadObjectCommand`. `getStream` returns the body as
   a stream for the download endpoint to pipe.
-- **`BaseStorageService`** is the abstract port the leave service depends on.
+- **`BaseStorageService`** is the abstract port `AttachmentService` depends on.
+- **`AttachmentService`** is the orchestrator that owns "validate → process →
+  upload → persist `attachments` row → return id (+ a rollback handle)" so the
+  leave service stays focused on leave rules and every *future* consumer
+  (profile photos, etc.) reuses the same seam (review fix — keeps the storage
+  responsibility out of `LeaveRequestsService`). It depends on the storage
+  port, the image processor, the validator, and the attachments repository.
 
 ### Bucket + key layout
 
@@ -89,7 +98,8 @@ leave-specific.
 `attachments`:
 - `id` (PK)
 - `bucket` (text)
-- `object_key_prefix` (text, e.g. `leave-attachments/42`)
+- `object_key_prefix` (text, e.g. `leave-attachments/<uuid>` — a generated
+  UUID, NOT the DB id; see Upload flow for why)
 - `original_filename` (text)
 - `content_type` (text)
 - `size_bytes` (int)
@@ -117,31 +127,37 @@ leave-specific.
 `POST /api/v1/users/me/leave-requests` becomes `multipart/form-data`: the
 existing JSON fields as form fields + a single `file` part.
 `me-leave-requests.controller` uses `FileInterceptor('file')`
-(`@nestjs/platform-express`, memory storage). Service sequence:
+(`@nestjs/platform-express`, memory storage — buffers the whole file in RAM,
+bounded by the size cap). Service sequence:
 
-1. **Validate** the file (magic bytes + size) → 422 on bad type/oversize.
+1. **Enforce the size cap FIRST**, before any processing — reject oversize at
+   the validation boundary so sharp never runs on an out-of-bound buffer.
+   Then **validate type** (magic bytes, not the client MIME) → 422 on bad
+   type/oversize.
 2. **Enforce the rule**:
    - `leave_type ∈ {sick, bereavement}` and **no file** → 422
      (`attachment` required).
    - `leave_type ∉ {sick, bereavement}` and file present → 422 (attachment not
      accepted for this type — keeps payloads honest).
 3. **Generate versions** (sharp) for images; PDFs pass through.
-4. **Upload** every version object to storage under the attachment prefix.
-   The `attachment_id` is needed for the key, so allocate it first (insert the
-   `attachments` row inside the transaction, then upload using its id, OR use a
-   generated UUID prefix; plan uses: insert attachments row → get id → upload).
-5. **Persist transactionally**: within one DB transaction, insert the
-   `attachments` row and the `leave_request` referencing `attachment_id`.
+4. **Generate a UUID prefix** and **upload every version object to storage**
+   under `leave-attachments/<uuid>/…` — all of this **before** opening any DB
+   transaction.
+5. **Persist in one short transaction**: insert the `attachments` row (storing
+   the UUID `object_key_prefix`) and the `leave_request` referencing the new
+   `attachment_id`, then commit.
 6. **Compensate on failure**: storage uploads can't enlist in the SQL
-   transaction. If the DB step throws after objects were written, best-effort
-   `delete` the uploaded objects (logged on failure — orphan sweep is out of
-   scope).
+   transaction. If the transaction throws after objects were written,
+   best-effort `delete` the uploaded objects (logged on failure — orphan sweep
+   is out of scope).
 
-> Ordering note: because the object key uses `attachment_id`, the attachments
-> row is inserted first (to get the id), objects are uploaded, then the
-> leave_request insert completes the transaction. If the leave_request insert
-> fails, the transaction rolls back the attachments row and the compensating
-> delete removes the objects.
+> **Why a UUID prefix, not the DB id (review fix):** keying objects by the
+> DB-generated `attachment_id` would force the S3 uploads to happen *between*
+> two SQL statements with the transaction open — pinning a pooled connection
+> and holding locks across network I/O. Using a UUID lets all uploads finish
+> before a single short transaction inserts both rows. Decoupling network I/O
+> from the transaction is the goal; the compensating delete still covers a
+> failed commit.
 
 ### Download — streamed, permission-checked
 
@@ -149,12 +165,22 @@ existing JSON fields as form fields + a single `file` part.
 (default `original`):
 
 1. Load the leave request + its attachment. 404 if either missing.
-2. **Authorize**: caller is the **owner** (`leave_request.employee_id ===
-   req.user.id`), OR an **L1/L2 approver** on this request's chain, OR holds
-   **`LEAVE:View`** admin permission (`system_admin` bypasses). Else 403.
+2. **Authorize against the request's SNAPSHOTTED approver columns** (review
+   fix): the `leave_requests` row already carries `l1_approver_id` and
+   `l2_approver_id` (snapshotted at submit). So the check is a plain field
+   comparison — caller is the **owner** (`leave_request.employee_id ===
+   req.user.id`), OR `req.user.id === leave_request.l1_approver_id`, OR
+   `req.user.id === leave_request.l2_approver_id`, OR holds **`LEAVE:View`**
+   admin permission (`system_admin` bypasses). Else 403. **No `approval_chains`
+   lookup** — the snapshot is the authority for who approved *this* request,
+   and the chain may have changed since. `l2_approver_id` is nullable
+   (single-step chains); a null never matches a caller id, so no special case.
 3. Reject `preview`/`thumbnail` for a PDF attachment (no such versions) → 404.
-4. `getStream` from storage; pipe with correct `Content-Type` and
-   `Content-Disposition: inline; filename="<original_filename>"`.
+4. `getStream` from storage; pipe with correct `Content-Type` and a
+   **sanitized** `Content-Disposition`. `original_filename` is user-controlled,
+   so encode it per RFC 5987 (`filename*=UTF-8''<pct-encoded>`) and strip
+   CR/LF + quotes to avoid header injection — never interpolate it raw into the
+   header.
 
 ## Docker
 
@@ -188,7 +214,9 @@ Wire the `storage` namespace into `AllConfigType`.
 
 ### Phase 0 — Foundation: deps, config, docker
 - Add deps: `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner` (kept for
-  future presigned use), `sharp`.
+  future presigned use), `sharp`, and dev dep `@types/multer` (review fix —
+  `@nestjs/platform-express` bundles multer's runtime but NOT the
+  `Express.Multer.File` type that `FileInterceptor`'s file param needs).
 - `storage.config.ts` + `storage-config.type.ts`; register in `AllConfigType`
   and `app.module` config load. Env validator with the keys above.
 - `.env.example`: `STORAGE_*` + `MINIO_ROOT_*`.
@@ -199,16 +227,21 @@ Wire the `storage` namespace into `AllConfigType`.
 
 ### Phase 1 — Storage module
 - domain types, `BaseStorageService` port, `S3Storage` impl,
-  `ImageProcessorService` (sharp), `file-validation`, `storage.module`.
+  `ImageProcessorService` (sharp, with `limitInputPixels` set), `file-validation`,
+  `AttachmentService` (orchestrator), `storage.module`.
 - **Unit tests:** `file-validation` (magic bytes for each type, oversize → 422,
   spoofed MIME rejected), `image-processor` (sharp on a fixture image yields 3
-  buffers with expected dimensions; PDF buffer skipped).
+  buffers with expected dimensions; PDF buffer skipped; oversized-dimension
+  image rejected by `limitInputPixels`).
 - **AC:** unit tests green; module compiles; port is mockable.
 
 ### Phase 2 — Attachments persistence
-- `CreateAttachmentsTable` migration (audit cols + soft delete).
-- Fold `attachment_id` FK into `CreateLeaveRequestsTable` migration; order
-  attachments-create before leave-create.
+- `CreateAttachmentsTable` migration (audit cols + soft delete; `object_key_prefix`
+  stores the UUID). **Timestamp window (review fix):** must be `> users-table`
+  and `< 1778400000000` (`CreateLeaveRequestsTable`) so the folded
+  `attachment_id` FK resolves — e.g. `1778350000000`.
+- Fold `attachment_id` FK into `CreateLeaveRequestsTable` migration (still
+  unreleased/dev-only, so no separate `Alter…` file).
 - `attachment` entity, domain class, mapper, repository, base repo,
   persistence module.
 - **Unit tests:** mapper `toDomain`/`toPersistence` round-trip.
@@ -217,13 +250,16 @@ Wire the `storage` namespace into `AllConfigType`.
 ### Phase 3 — Leave attachment wiring (upload)
 - `SubmitLeaveRequestDto`: keep JSON fields; controller switches to
   `multipart/form-data` + `FileInterceptor('file')`.
-- `LeaveRequestsService`: validation rule (mandatory for sick/bereavement,
-  rejected otherwise), version generation, storage upload, transactional
-  insert of attachment + leave_request, compensating object delete on rollback.
+- `LeaveRequestsService`: owns only the leave-side rule (mandatory for
+  sick/bereavement, rejected otherwise) and delegates the
+  validate→process→upload→persist work to `AttachmentService` (review fix — no
+  storage orchestration in the leave service). Upload happens via UUID prefix
+  **before** a single short transaction that inserts the attachment +
+  leave_request rows; compensating object delete on rollback.
 - `leave_request` domain/entity/mapper carry `attachment_id`.
 - **Unit tests:** rule enforcement (sick w/o file → 422; vacation w/ file →
   422; sick w/ valid image → uploads 3 versions + links id), storage port
-  mocked; DB-failure path triggers compensating delete.
+  mocked; DB-failure path triggers the compensating delete.
 - **E2E:** submit sick leave without file → 422; with a valid image → 201,
   attachment row exists, 3 version objects exist in (local/mock) storage.
 - **AC:** all green; submitting non-sick/bereavement leave is unchanged.
@@ -231,8 +267,10 @@ Wire the `storage` namespace into `AllConfigType`.
 ### Phase 4 — Download endpoint
 - `GET /leave-requests/:id/attachment?version=` on the leave-requests
   controller (or a focused attachments controller in the module).
-- Permission check (owner / approver / `LEAVE:View` / `system_admin`); stream
-  pipe with content headers; PDF `preview`/`thumbnail` → 404.
+- Permission check against the request's snapshotted `l1/l2_approver_id`
+  (owner / snapshotted approver / `LEAVE:View` / `system_admin`); stream pipe
+  with content headers + RFC 5987-encoded filename; PDF `preview`/`thumbnail`
+  → 404.
 - **E2E:** owner 200 (original + preview + thumbnail for image), approver 200,
   unrelated employee 403, missing request 404, PDF preview 404.
 - **AC:** all green.
@@ -258,7 +296,9 @@ Wire the `storage` namespace into `AllConfigType`.
   CI) — never real AWS. Covers upload rule, version creation, download
   permissions.
 - New backend deps: `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`,
-  `sharp`. NestJS Express (`@nestjs/platform-express`, multer) already present.
+  `sharp`, dev `@types/multer`. `@nestjs/platform-express` (which bundles
+  multer's runtime) is already present; only the `@types/multer` types are
+  missing.
 
 ## Risks / notes
 
