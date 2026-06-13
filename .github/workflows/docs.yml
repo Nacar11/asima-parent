@@ -1,0 +1,49 @@
+name: Docs conventions
+
+# The parent repo is docs-only (no app code), so its CI enforces the
+# documentation conventions from CLAUDE.md rather than lint/test/build:
+#   1. Every docs/plans/ snapshot is named YYYY-MM-DD-<slug>.md.
+#   2. No todo snapshot is ever committed to docs/plans/ (todos live only
+#      in tasks/todo.md).
+#   3. Relative links between docs aren't broken (offline check only).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  conventions:
+    name: Plan naming + link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plan filename convention + no committed todos
+        shell: bash
+        run: |
+          shopt -s nullglob
+          fail=0
+          for f in docs/plans/*.md; do
+            base=$(basename "$f")
+            # Rule 1: must start with YYYY-MM-DD-
+            if ! [[ "$base" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}- ]]; then
+              echo "::error file=$f::plan filename must start with YYYY-MM-DD- (got '$base')"
+              fail=1
+            fi
+            # Rule 2: no todo snapshots in docs/plans/
+            if [[ "$base" == *-todo.md || "$base" == *-todo-*.md ]]; then
+              echo "::error file=$f::todo snapshots belong in tasks/todo.md, never in docs/plans/"
+              fail=1
+            fi
+          done
+          if [[ "$fail" -eq 0 ]]; then
+            echo "All docs/plans/ filenames follow the convention."
+          fi
+          exit "$fail"
+
+      - name: Markdown link check (offline — relative links only)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress 'docs/**/*.md' '*.md'
+          fail: true

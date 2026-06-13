@@ -998,6 +998,6 @@ This plan is "done" when:
 ## 16. Notes on file placement and task tracking
 
 - This plan lives at `docs/plans/2026-05-30-leave-correction-and-approval-chains.md` per the established convention (memory rule: every plan in `docs/plans/` starts with YYYY-MM-DD).
-- A companion task list lives at `docs/plans/2026-05-30-leave-correction-and-approval-chains-todo.md`.
+- The companion task checklist lives only in the gitignored `tasks/todo.md` working file — never committed to `docs/plans/` (todo snapshots are not part of the audit trail).
 - The planning skill's default `tasks/plan.md` / `tasks/todo.md` landed in a gitignored folder here; we use `docs/plans/` instead.
 - If you want backend-only task tracking that lives in `asima-backend/tasks/`, mirror the Phase 1/3/5 sections into `asima-backend/tasks/plan.md` (already referenced by `asima-backend/CLAUDE.md`).
