@@ -23,8 +23,8 @@ Don't grow frontend code inside the backend tree.
 
 ## Cross-cutting concepts (read before touching auth, users, or approvals)
 
-The terminology below is **load-bearing** — the backend ADR
-`asima-backend/docs/adr/0001-roles-and-approval-design.md` records why these
+The terminology below is **load-bearing** — the ADR
+`asima-parent/docs/adr/0001-roles-and-approval-design.md` records why these
 are kept orthogonal. Frontend code must use the same vocabulary.
 
 - **Role** (`users.role_id`) — global capability, drives permission gates.
@@ -93,20 +93,22 @@ follows this contract on both sides of the wire:
 
 ## Plans and todos — `tasks/` vs `docs/plans/`
 
-Every project root in this repo (parent, backend, frontend) follows the
-same convention for plan + todo files:
+Working files (`tasks/`) are per-repo and gitignored; committed plan
+snapshots live ONLY in the parent repo under `asima-parent/docs/plans/`,
+regardless of which repo's feature they describe (each sub-repo's `CLAUDE.md`
+states the same under "Documentation lives in the parent repo"). The split:
 
 | Location | Tracked? | Role | Lifetime |
 |---|---|---|---|
 | `tasks/plan.md` | **Gitignored** | The currently-active plan for the feature being worked on right now. Contents change every time the active feature changes. | Mutable working file |
-| `tasks/todo.md` | **Gitignored** | The currently-active checklist. Same file pair as `tasks/plan.md`. **The todo lives ONLY here** — never committed to `docs/plans/`. | Mutable working file |
-| `docs/plans/YYYY-MM-DD-<slug>.md` | **Committed** | Audit snapshot of the plan as it was at the time the feature started. Permanent record. | Frozen at write time |
+| `tasks/todo.md` | **Gitignored** | The currently-active checklist. Same file pair as `tasks/plan.md`. **The todo lives ONLY here** — never committed. | Mutable working file |
+| `asima-parent/docs/plans/YYYY-MM-DD-<slug>.md` | **Committed (parent repo only)** | Audit snapshot of the plan as it was at the time the feature started — for every repo's features, never inside a sub-repo. Permanent record. | Frozen at write time |
 
 **The workflow when starting a new major feature:**
 
-1. Write the plan as `docs/plans/YYYY-MM-DD-<slug>.md` and commit it —
-   this is the audit trail. **Do NOT create a committed
-   `docs/plans/...-todo.md`; the todo is a working file only.**
+1. Write the plan as `asima-parent/docs/plans/YYYY-MM-DD-<slug>.md` and
+   commit it in the parent repo — this is the audit trail. **Do NOT create a
+   committed `docs/plans/...-todo.md`; the todo is a working file only.**
 2. Copy the plan to `tasks/plan.md` and write the checklist to
    `tasks/todo.md`. These are the working files. They're gitignored, so
    day-to-day edits don't pollute git history.
@@ -128,7 +130,7 @@ snapshot solves that — it's what we agreed to do at the start; the
 
 **Conventions:**
 
-- `docs/plans/` filenames MUST start with `YYYY-MM-DD-`
+- `asima-parent/docs/plans/` filenames MUST start with `YYYY-MM-DD-`
   (e.g. `2026-05-30-leave-correction-and-approval-chains.md`).
 - The `tasks/` file pair has only the two canonical names:
   `tasks/plan.md` and `tasks/todo.md`. No date prefix; the active
@@ -139,12 +141,14 @@ snapshot solves that — it's what we agreed to do at the start; the
 
 ## Where authoritative docs live
 
-- **Active plan** for whatever feature is in flight:
+- **Active plan** (gitignored working files) for whatever feature is in flight:
   - Parent (cross-cutting features): `asima-parent/tasks/plan.md` + `tasks/todo.md`.
   - Backend-only: `asima-backend/tasks/plan.md` + `tasks/todo.md`.
   - Frontend-only: `asima-frontend/tasks/plan.md` + `tasks/todo.md`.
-- **Historical plans**: `docs/plans/YYYY-MM-DD-*.md` at the appropriate root.
-- `asima-backend/docs/adr/` — architectural decisions. Read the relevant
+- **Historical plans** (committed): `asima-parent/docs/plans/YYYY-MM-DD-*.md`
+  — the parent repo holds the snapshots for every repo's features; sub-repos
+  keep no `docs/` directory.
+- `asima-parent/docs/adr/` — architectural decisions. Read the relevant
   ADR before changing the area it covers.
 - `asima-parent/docs/universal-guidelines/module-architecture.md` —
   hexagonal layering blueprint every backend module follows.
