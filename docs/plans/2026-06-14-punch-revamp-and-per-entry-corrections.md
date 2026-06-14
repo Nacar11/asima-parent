@@ -69,6 +69,12 @@ overtime entries are kept out of the tardiness calculation.
 ### 2. Per-entry corrections — fix the bleed
 
 **Backend (`asima-backend/src/time-correction-requests/`)**
+- **Ownership guard (security, C1).** Before the uniqueness check, when
+  `target_entry_id` is set, load the entry and reject with **403** unless it
+  belongs to the submitting employee. `submit()` currently trusts the
+  client-supplied `target_entry_id` — an **IDOR**: an employee can target, and
+  read back the `original_time_in/out` of, **another employee's** entry. Closed
+  here since this plan already edits the guard.
 - Replace the per-day uniqueness check in submit with **per-entry**:
   `findActiveForEntry(target_entry_id)` blocks a second active correction for
   the **same entry**. Two different entries on one day are each correctable.
@@ -81,8 +87,12 @@ overtime entries are kept out of the tardiness calculation.
   `Map<target_entry_id, TimeCorrectionRequest>` over the visible window.
 - `EntriesTable` keys Status / Approver / in-out-diff / the "Correction
   requested" guard by **`row.id`**, not `row.work_date`.
-- Null-target (new-log) corrections render as their **own pending row** for
-  the date, not smeared across existing rows.
+- Null-target (new-log) corrections are **out of scope for the timesheet view**
+  (I1 — descoped). A missed-punch request is for a date with *no* entry, so
+  there is no row to attach it to; `useMyCorrectionsByEntry` simply skips
+  null-target rows. They keep their existing lifecycle (Add Logs drawer +
+  approvals inbox). Surfacing them as synthetic pending rows is a separate
+  feature, not built here.
 
 ### 3. Home dashboard + late detection
 
@@ -139,15 +149,26 @@ tardiness math stays correct today without it.
 
 ## Testing
 
-**Backend (jest)**
+**Backend (jest — service, mocked repos)**
 - Cooldown: clocked-in and clocked-out, just-under vs just-over 5 min, admin
   create exempt, `applyCorrection` exempt.
 - Per-entry uniqueness: two entries same day each correctable; same entry
   double-correct blocked; null-target new-log guard unchanged.
+- **Ownership (C1):** submitting a correction against another employee's entry
+  → 403; against a missing entry → 404.
+
+**Backend (e2e — `npm run test:e2e`, I2)**
+- The new **raw queries** are only exercised here (service specs mock the
+  repos, so a wrong column/order ships green): `findLatestForEmployee`
+  (`COALESCE(time_out, time_in)` ordering) and `findActiveForEntry`.
+- Scenarios: punch → re-punch < 5 min → **429**; correct entry #1 and entry #2
+  on the same day **independently**; double-correct the same entry → blocked;
+  submit against another employee's entry → **403**.
 
 **Frontend (vitest)**
 - `useMyCorrectionsByEntry` keys by `target_entry_id`; a correction on one
-  entry does **not** mark sibling same-day rows.
+  entry does **not** mark sibling same-day rows (asserted in
+  `tests/unit/features/time-entries/entries-table.spec.tsx`, I3).
 - Home: cooldown countdown + disabled state; punch-in late detection against a
   schedule (late, on-time, no-schedule → no chip).
 
