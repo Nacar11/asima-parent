@@ -1,0 +1,403 @@
+// ============================================================================
+//  asima — database schema (DBML)
+// ----------------------------------------------------------------------------
+//  Db Diagram Link: http://dbdiagram.io/d/Asima-Database-Schema-Design-69fc0eba7a923b94723d26bb
+//
+//  This file is REGENERATED from the TypeORM migrations under
+//  asima-backend/src/database/migrations/ — they are the source of truth for
+//  what Postgres actually holds. Every table below is migrated and shipped.
+//
+//  Conventions (per asima-backend/CLAUDE.md):
+//    - snake_case column names; timestamptz for all datetimes.
+//    - Audit fields created_by / updated_by / deleted_by on every business
+//      entity; soft delete via deleted_at.
+//    - Single-tenant — no organization_id.
+//
+//  Reading the relationships:
+//    - Every Ref shown is a real DB FOREIGN KEY (ON DELETE RESTRICT, except
+//      role_permissions which is ON DELETE CASCADE) — EXCEPT the audit columns
+//      created_by / updated_by / deleted_by. Those are drawn as logical refs
+//      to users for the ERD, but are NOT DB-enforced foreign keys, with one
+//      exception: `attachments` does enforce its audit FKs. The app sets audit
+//      columns; they are intentionally left unconstrained elsewhere.
+//
+//  DBML can't express partial-index WHERE clauses or CHECK constraints, so
+//  those invariants live in each table's Note.
+// ============================================================================
+
+
+// ---------- Enums ---------------------------------------------------------- //
+
+Enum time_source {
+  manual
+  biometric
+  admin
+  correction
+}
+
+Enum time_entry_status {
+  open
+  confirmed
+}
+
+Enum attachment_kind {
+  image
+  pdf
+}
+
+Enum leave_type {
+  vacation
+  sick
+  bereavement
+  birthday
+  emergency
+}
+
+Enum leave_request_status {
+  pending_l1
+  pending_l2
+  approved
+  rejected
+  cancelled
+}
+
+Enum leave_day_portion {
+  full
+  first_half
+  second_half
+}
+
+Enum decision_path {
+  chain
+  override
+}
+
+Enum time_correction_status {
+  pending_l1
+  pending_l2
+  approved
+  rejected
+  cancelled
+}
+
+Enum leave_allocation_source {
+  default
+  admin_grant
+}
+
+
+// ---------- Identity foundation -------------------------------------------- //
+
+Table permissions {
+  id            integer       [pk, increment]
+  code          varchar(100)  [not null, note: "RESOURCE:Action — e.g. USER:Create, LEAVE:Approve"]
+  resource      varchar(50)   [not null, note: "USER, ROLE, PERMISSION, LEAVE, TIME_CORRECTION, APPROVAL, ..."]
+  action        varchar(30)   [not null, note: "Create | View | Update | Delete | Approve | ViewAll | ApproveAny | ..."]
+  description   varchar(255)
+  created_at    timestamptz   [not null, default: `now()`]
+  updated_at    timestamptz   [not null, default: `now()`]
+
+  Indexes {
+    code     [unique]
+    resource
+  }
+
+  Note: 'Seed-managed catalog (src/database/seeds/data/permissions.json). No audit/soft-delete columns — it predates users and is configuration, not user data.'
+}
+
+Table roles {
+  id            integer       [pk, increment]
+  name          varchar(50)   [not null]
+  description   varchar(255)
+  created_by    integer       [ref: > users.id]
+  updated_by    integer       [ref: > users.id]
+  deleted_by    integer       [ref: > users.id]
+  created_at    timestamptz   [not null, default: `now()`]
+  updated_at    timestamptz   [not null, default: `now()`]
+  deleted_at    timestamptz
+
+  Indexes {
+    name [unique]
+  }
+
+  Note: 'Global capability bucket (one per user). v0 seeds SUPER_ADMIN / ADMIN / EMPLOYEE; ADR 0001 evolves this.'
+}
+
+Table role_permissions {
+  role_id        integer  [not null, ref: > roles.id]
+  permission_id  integer  [not null, ref: > permissions.id]
+
+  Indexes {
+    (role_id, permission_id) [pk]
+    role_id
+    permission_id
+  }
+
+  Note: 'M2M join (composite PK). Both FKs ON DELETE CASCADE / ON UPDATE CASCADE.'
+}
+
+Table users {
+  id             integer       [pk, increment]
+  email          varchar(255)  [not null, note: "Case-insensitive unique among non-deleted rows (see Note)"]
+  password_hash  varchar(255)  [not null, note: "bcryptjs; column is select:false in the entity"]
+  first_name     varchar(100)  [not null]
+  last_name      varchar(100)  [not null]
+  title          varchar(100)  [note: "Freeform display string — NEVER drives auth/routing"]
+  role_id        integer       [not null, ref: > roles.id]
+  system_admin   boolean       [not null, default: false, note: "Short-circuits PermissionsGuard"]
+  is_active      boolean       [not null, default: true]
+  last_login_at  timestamptz
+  created_by     integer       [ref: > users.id]
+  updated_by     integer       [ref: > users.id]
+  deleted_by     integer       [ref: > users.id]
+  created_at     timestamptz   [not null, default: `now()`]
+  updated_at     timestamptz   [not null, default: `now()`]
+  deleted_at     timestamptz
+
+  Indexes {
+    role_id
+    is_active
+  }
+
+  Note: '''
+  Partial unique index `users_email_lower_uq` on LOWER(email) WHERE deleted_at IS NULL —
+  case-insensitive uniqueness that excludes soft-deleted rows (lets a deleted email be re-created).
+  '''
+}
+
+
+// ---------- Time tracking -------------------------------------------------- //
+
+Table time_entries {
+  id            integer            [pk, increment]
+  employee_id   integer            [not null, ref: > users.id, note: "The employee, not the actor"]
+  work_date     date               [not null, note: "Calendar date this segment counts toward — supports overnight shifts"]
+  time_in       timestamptz        [not null]
+  time_out      timestamptz        [note: "NULL while status = open (still clocked in)"]
+  source        time_source        [not null]
+  status        time_entry_status  [not null, default: 'open']
+  notes         varchar(500)
+  created_by    integer            [ref: > users.id]
+  updated_by    integer            [ref: > users.id]
+  deleted_by    integer            [ref: > users.id]
+  created_at    timestamptz        [not null, default: `now()`]
+  updated_at    timestamptz        [not null, default: `now()`]
+  deleted_at    timestamptz
+
+  Indexes {
+    (employee_id, work_date)
+    (employee_id, status)
+    work_date
+  }
+
+  Note: '''
+  CHECK (time_out IS NULL OR time_out > time_in).
+  Partial unique index `IDX_time_entries_one_open_per_employee` on (employee_id)
+  WHERE status = 'open' AND deleted_at IS NULL — at most one open entry per employee
+  (the toggle-punch race guard).
+  '''
+}
+
+Table work_schedules {
+  id              integer       [pk, increment]
+  employee_id     integer       [not null, ref: > users.id]
+  day_of_week     smallint      [not null, note: "0 = Sunday … 6 = Saturday"]
+  expected_in     time          [not null]
+  expected_out    time          [not null]
+  break_minutes   integer       [not null, default: 0]
+  break_start     time          [note: "Local time the break begins; NULL when break_minutes = 0"]
+  effective_from  date          [not null]
+  effective_to    date          [note: "NULL = active. Set this to logically end a row (never UPDATE destructively)"]
+  created_by      integer       [ref: > users.id]
+  updated_by      integer       [ref: > users.id]
+  deleted_by      integer       [ref: > users.id]
+  created_at      timestamptz   [not null, default: `now()`]
+  updated_at      timestamptz   [not null, default: `now()`]
+  deleted_at      timestamptz
+
+  Indexes {
+    (employee_id, day_of_week)
+    (employee_id, effective_to)
+  }
+
+  Note: '''
+  CHECKs: day_of_week BETWEEN 0 AND 6; break_minutes >= 0; break_start required when
+  break_minutes > 0; break_start >= expected_in; break_start + break_minutes <= expected_out;
+  expected_out > expected_in; effective_to IS NULL OR effective_to >= effective_from.
+  Partial unique index `IDX_work_schedules_one_active_per_employee_day` on
+  (employee_id, day_of_week) WHERE effective_to IS NULL AND deleted_at IS NULL.
+  '''
+}
+
+
+// ---------- Approval chains ------------------------------------------------ //
+
+Table approval_chains {
+  id            integer       [pk, increment]
+  employee_id   integer       [not null, ref: > users.id, note: "Whose request is being routed"]
+  step          integer       [not null, note: "1 = L1, 2 = L2, … (CHECK step >= 1)"]
+  approver_id   integer       [not null, ref: > users.id, note: "Authorized approver at this step (CHECK approver_id <> employee_id)"]
+  effective_at  timestamptz   [not null, default: `now()`]
+  ended_at      timestamptz   [note: "NULL = active. Reassignment = stamp ended_at, then insert a new row"]
+  created_by    integer       [ref: > users.id]
+  updated_by    integer       [ref: > users.id]
+  created_at    timestamptz   [not null, default: `now()`]
+  updated_at    timestamptz   [not null, default: `now()`]
+
+  Indexes {
+    (employee_id, step, effective_at) [unique]
+    (employee_id, ended_at)
+    approver_id
+  }
+
+  Note: '''
+  Per-employee, versioned approver assignments (ADR 0001). NO soft-delete columns —
+  reassignment (logical end) IS the deletion mechanism. Requests snapshot the approver
+  at submit time, so old rows must remain to resolve historical requests.
+  CHECKs: step >= 1; approver_id <> employee_id.
+  Partial unique index `IDX_approval_chains_active_step_uq` on (employee_id, step)
+  WHERE ended_at IS NULL — one active approver per (employee, step).
+  '''
+}
+
+
+// ---------- Storage (generic attachments) ---------------------------------- //
+
+Table attachments {
+  id                 integer          [pk, increment]
+  bucket             text             [not null]
+  object_key_prefix  text             [not null, note: "UUID prefix e.g. leave-attachments/<uuid> — never the DB id"]
+  original_filename  text             [not null]
+  content_type       text             [not null]
+  size_bytes         integer          [not null, note: "CHECK size_bytes > 0"]
+  kind               attachment_kind  [not null]
+  has_versions       boolean          [not null, note: "true for images (preview + thumbnail); false for PDFs"]
+  owner_id           integer          [not null, ref: > users.id]
+  created_by         integer          [ref: > users.id]
+  updated_by         integer          [ref: > users.id]
+  deleted_by         integer          [ref: > users.id]
+  created_at         timestamptz      [not null, default: `now()`]
+  updated_at         timestamptz      [not null, default: `now()`]
+  deleted_at         timestamptz
+
+  Note: '''
+  Generic stored-file registry (first consumer: leave attachments). Audit FKs ARE
+  DB-enforced here (unlike other tables). CHECK size_bytes > 0.
+  Partial unique index `UQ_attachments_object_key_prefix` on (object_key_prefix)
+  WHERE deleted_at IS NULL.
+  '''
+}
+
+
+// ---------- Leave ---------------------------------------------------------- //
+
+Table leave_requests {
+  id              integer               [pk, increment]
+  employee_id     integer               [not null, ref: > users.id]
+  leave_type      leave_type            [not null]
+  start_date      date                  [not null]
+  end_date        date                  [not null]
+  working_days    "numeric(4,1)"        [not null, note: "CHECK working_days >= 0.5"]
+  day_portion     leave_day_portion     [not null, default: 'full']
+  start_time      time                  [note: "Set for partial-day (half-day) leave"]
+  end_time        time
+  reason          varchar(500)
+  status          leave_request_status  [not null, default: 'pending_l1']
+  submitted_at    timestamptz           [not null, default: `now()`]
+  decided_at      timestamptz
+  decided_by      integer               [ref: > users.id]
+  decision_note   varchar(500)
+  decision_path   decision_path         [note: "chain = normal L1/L2; override = HR/admin ApproveAny"]
+  cancelled_at    timestamptz
+  cancelled_by    integer               [ref: > users.id]
+  l1_approver_id  integer               [not null, ref: > users.id, note: "Snapshot of active chain at submit (NOT NULL — no chain, no submission)"]
+  l2_approver_id  integer               [ref: > users.id, note: "NULL = single-step chain (auto-approves after L1)"]
+  attachment_id   integer               [ref: > attachments.id, note: "Required for sick/bereavement; NULL otherwise"]
+  created_by      integer               [ref: > users.id]
+  updated_by      integer               [ref: > users.id]
+  deleted_by      integer               [ref: > users.id]
+  created_at      timestamptz           [not null, default: `now()`]
+  updated_at      timestamptz           [not null, default: `now()`]
+  deleted_at      timestamptz
+
+  Indexes {
+    (employee_id, status)
+    (status, submitted_at)
+    l1_approver_id
+    l2_approver_id
+  }
+
+  Note: '''
+  CHECKs: end_date >= start_date; working_days >= 0.5; day_portion = 'full' OR start_date = end_date.
+  Partial inbox indexes: `IDX_leave_requests_l1_inbox` on (l1_approver_id)
+  WHERE status='pending_l1' AND deleted_at IS NULL; `IDX_leave_requests_l2_inbox` on
+  (l2_approver_id) WHERE status='pending_l2' AND deleted_at IS NULL.
+  '''
+}
+
+Table leave_allocations {
+  id            integer                  [pk, increment]
+  employee_id   integer                  [not null, ref: > users.id]
+  leave_type    leave_type               [not null]
+  amount        integer                  [not null, note: "CHECK amount > 0 — grants only add; revocation is a soft-delete"]
+  source        leave_allocation_source  [not null, note: "default (10 vacation/10 sick) or admin_grant"]
+  reason        varchar(500)
+  granted_by    integer                  [ref: > users.id]
+  created_by    integer                  [ref: > users.id]
+  updated_by    integer                  [ref: > users.id]
+  deleted_by    integer                  [ref: > users.id]
+  created_at    timestamptz              [not null, default: `now()`]
+  updated_at    timestamptz              [not null, default: `now()`]
+  deleted_at    timestamptz
+
+  Indexes {
+    (employee_id, leave_type)
+  }
+
+  Note: 'Append-only grant ledger. allowance(employee, type) = SUM(amount) over non-deleted rows.'
+}
+
+
+// ---------- Time corrections ----------------------------------------------- //
+
+Table time_correction_requests {
+  id                 integer                 [pk, increment]
+  employee_id        integer                 [not null, ref: > users.id]
+  target_entry_id    integer                 [ref: > time_entries.id, note: "NULL = missed-punch (a new entry is created on approval)"]
+  work_date          date                    [not null]
+  proposed_time_in   timestamptz             [not null]
+  proposed_time_out  timestamptz             [note: "NULL = open segment"]
+  reason             varchar(500)            [not null]
+  status             time_correction_status  [not null, default: 'pending_l1']
+  submitted_at       timestamptz             [not null, default: `now()`]
+  decided_at         timestamptz
+  decided_by         integer                 [ref: > users.id]
+  decision_note      varchar(500)
+  decision_path      decision_path           [note: "chain = normal L1/L2; override = HR/admin ApproveAny"]
+  cancelled_at       timestamptz
+  cancelled_by       integer                 [ref: > users.id]
+  l1_approver_id     integer                 [not null, ref: > users.id, note: "Snapshot of active chain at submit (NOT NULL)"]
+  l2_approver_id     integer                 [ref: > users.id, note: "NULL = single-step chain"]
+  created_by         integer                 [ref: > users.id]
+  updated_by         integer                 [ref: > users.id]
+  deleted_by         integer                 [ref: > users.id]
+  created_at         timestamptz             [not null, default: `now()`]
+  updated_at         timestamptz             [not null, default: `now()`]
+  deleted_at         timestamptz
+
+  Indexes {
+    (employee_id, status)
+    (employee_id, work_date)
+    (status, submitted_at)
+    l1_approver_id
+    l2_approver_id
+  }
+
+  Note: '''
+  On final approval, TimeEntriesService.applyCorrection writes the underlying time_entries
+  row with source='correction'. CHECK (proposed_time_out IS NULL OR proposed_time_out > proposed_time_in).
+  Partial inbox indexes: `IDX_tcr_l1_inbox` on (l1_approver_id) WHERE status='pending_l1'
+  AND deleted_at IS NULL; `IDX_tcr_l2_inbox` on (l2_approver_id) WHERE status='pending_l2'
+  AND deleted_at IS NULL.
+  '''
+}

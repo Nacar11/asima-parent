@@ -156,6 +156,12 @@ snapshot solves that — it's what we agreed to do at the start; the
 - `asima-parent/docs/universal-guidelines/frontend-component-blueprint.md`
   — prompt-context rules for creating any frontend component
   (shadcn-only, no parallel UI sources).
+- `asima-parent/docs/universal-guidelines/frontend-architecture.md` —
+  feature-sliced layering, the data-access/`keys.ts` rules, and the explicit
+  decision NOT to use hexagonal on the frontend.
+- `asima-parent/docs/universal-guidelines/ci-cd-and-quality-gates.md` —
+  the CI workflows + Husky pre-push hooks across all three repos: what's
+  enforced where, the standard stack, CI secrets handling, and recipes.
 - `asima-backend/reference/` — exemplar code (categories module) used as a
   pattern reference. Not shipping code; don't import from it.
 
