@@ -40,12 +40,13 @@ convention.
 
 ## Getting started
 
-Run the backend first, then the frontend — each has its own runbook:
+Run the backend first, then the frontend — each lives in its own repo with
+its own runbook (cloned as a sibling directory next to this one):
 
-- **Backend:** [`asima-backend/README.md`](./asima-backend/README.md) —
-  Postgres + MinIO in Docker, API on the host at `:3000`.
-- **Frontend:** [`asima-frontend/README.md`](./asima-frontend/README.md) —
-  Next.js SPA at `:3001`, talks to the backend's `/api/v1`.
+- **Backend:** [`asima-backend` README](https://github.com/Nacar11/asima-backend#readme)
+  — Postgres + MinIO in Docker, API on the host at `:3000`.
+- **Frontend:** [`asima-frontend` README](https://github.com/Nacar11/asima-frontend#readme)
+  — Next.js SPA at `:3001`, talks to the backend's `/api/v1`.
 
 ## Where to look first
 
