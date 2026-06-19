@@ -2,7 +2,9 @@
 
 **Date:** 2026-06-19
 **Repos:** `asima-backend` (read-model) + `asima-frontend` (UI) — cross-cutting
-**Status:** Planned (not started)
+**Status:** Planned (not started) — revised after a five-axis review
+(folded in C1 nullability, I1 FSD placement, I2 cross-slice token, I3
+personal-inbox "(you)", S1 step guard, S2 serialization, S3 no-N+1 test).
 **Skills used:** `agent-skills:planning-and-task-breakdown` (vertical slices,
 AC + verification, checkpoints) and `ui-ux-pro-max` (status-badge semantics,
 contrast, tabular figures, truncation, a11y).
@@ -57,9 +59,16 @@ into the **same batch**, so there is **no N+1** (mirrors the backend reuse pass)
   add the field to `PendingApprovalSchema` only.
 - **Backend layers move together** (ADR/hexagonal): domain → service mapping →
   controller/serialization → unit/e2e test land in one slice.
-- **FSD on the frontend.** The shared status cell is cross-feature *UI* →
-  `components/`; the pure "is this me / label" logic is a tiny pure helper (unit
-  tested). No new server-state in components.
+- **FSD on the frontend.** `ApprovalStatusCell` renders a `PendingApproval`
+  (an approvals-slice type), so it lives in `features/approvals/components/`
+  (mirroring `leave-request-status-cell.tsx` in the leave slice) — **not** in
+  `components/`, which may never import `features/`. Only the pure
+  `approverLabel(name, isSelf)` text helper is cross-cutting → `lib/` (no feature
+  imports). No new server-state in components. (Review I1.)
+- **No cross-slice token reach.** The approvals badge defines its amber/pending
+  classes **locally**; it does NOT import `LEAVE_STATUS_META` from
+  `features/leave/format.ts` (that would be a forbidden cross-slice import). A
+  future shared `<StatusBadge>` primitive is out of scope. (Review I2.)
 - **Identity from the token.** "(you)" compares ids against `useAuth().user.id`
   — never the URL, never a name-string match.
 - **Behavior-preserving.** The employee status cell keeps its current lines; we
@@ -70,9 +79,10 @@ into the **same batch**, so there is **no N+1** (mirrors the backend reuse pass)
 
 ## 3. UI/UX direction (from `ui-ux-pro-max`)
 
-Data-dense dashboard table; align to the app's **existing** status tokens
-(`LEAVE_STATUS_META` amber/emerald/rose on neutral surfaces) rather than a new
-palette — consistency over novelty.
+Data-dense dashboard table; match the **visual language** of the app's existing
+status tokens (amber/emerald/rose on neutral surfaces) rather than a new palette
+— consistency over novelty. The classes are defined **locally in the approvals
+slice** (not imported from leave's `LEAVE_STATUS_META`; see Review I2).
 
 - **`color-not-only`** — status is a text badge ("Pending L1"), never color alone.
 - **`color-accessible-pairs`** — badge fg/bg ≥ 4.5:1 (reuse vetted token classes).
@@ -95,31 +105,52 @@ palette — consistency over novelty.
 ### Phase 0 — Foundation: read-model + shared helper (no visible behavior change)
 
 - **0.1 Backend — enrich `PendingApproval` with `current_approver_name`.**
-  `pending-approval.ts` domain field; in `ApprovalsService.mapLeaves` /
-  `mapCorrections`, fold `current_approver_id` into the existing `resolveNames`
-  batch and set `item.current_approver_name`; ensure controller serialization
-  exposes it. **+ backend unit test**: read-model includes the approver name;
-  **+ e2e** assertion on the `/approvals` payload shape.
-  - *AC:* `GET /api/v1/approvals` rows include `current_approver_name`; single
-    `findByIds` (no extra query per row); backend `test` + `test:e2e` green.
+  Add the field to `pending-approval.ts` typed **non-null `string`** with an
+  `@ApiProperty` decorator (OpenAPI parity — there is no class-transformer
+  `@Expose` whitelist; the controller returns the domain object directly, so the
+  field serializes automatically — Review S2). In `ApprovalsService.mapLeaves` /
+  `mapCorrections`, **union `current_approver_id` into the existing `resolveNames`
+  id set** (one `findByIds`) and set
+  `item.current_approver_name = names.get(currentApproverId) ?? `User #${currentApproverId}`` —
+  the **same `User #${id}` fallback as `employee_name`** so a deactivated/missing
+  approver still yields a string and never breaks the zod parse (Review C1).
+  **+ backend unit test**: read-model includes the approver name AND asserts
+  `findByIds` is called **once** with the unioned employee+approver ids (locks
+  the no-N+1 guarantee — Review S3); **+ e2e** assertion on the `/approvals`
+  payload shape.
+  - *AC:* `GET /api/v1/approvals` rows always include a string
+    `current_approver_name` (fallback included); exactly one `findByIds`; backend
+    `test` + `test:e2e` green.
 - **0.2 Frontend — extend the zod contract.** Add
-  `current_approver_name: z.string()` to `PendingApprovalSchema`.
+  `current_approver_name: z.string()` (non-nullable — backend guarantees a string
+  via the fallback) to `PendingApprovalSchema`. Note the asymmetry with the
+  employee read-models, whose `l*_approver_name` stay `z.string().nullable().optional()`.
   - *AC:* `npm run typecheck` green; `api.spec`/`schemas.spec` updated.
-- **0.3 Frontend — shared pure helper.** `approverLabel(name, isSelf)` →
-  `"Danielle Aguilar (you)"` / `"Danielle Aguilar"`; `null` → `"—"`. Lives in a
-  shared module (`components/approval-status/` or `lib/`), **+ Vitest** (self,
-  not-self, null).
+- **0.3 Frontend — shared pure helper.** `approverLabel(name: string | null, isSelf: boolean)`
+  → `"Danielle Aguilar (you)"` / `"Danielle Aguilar"`; `null`/empty → `"—"`. The
+  `null` branch exists for the **employee-side cells** (nullable approver names);
+  the inbox always passes a string. Lives in `lib/` (pure, no feature imports).
+  **+ Vitest** (self, not-self, null).
   - *AC:* unit test green; pure, no feature imports.
 - **Checkpoint A:** backend + frontend `typecheck/lint/build/test` green; the new
   field round-trips; nothing renders it yet (pure addition).
 
 ### Phase 1 — Pilot: leave approvals inbox `STEP` → `STATUS` (the screenshot)
 
-- **1.1 `ApprovalStatusCell`** (`components/approval-status/approval-status-cell.tsx`):
-  status badge `Pending L{current_step}` (reuse the amber "pending" token) + a
-  supporting line `Awaiting L{step} · {approverLabel(current_approver_name, isSelf)}`
-  where `isSelf = current_approver_id === viewerId`. **+ Vitest** (self shows
-  "(you)"; other shows plain name; step→L1/L2).
+- **1.1 `ApprovalStatusCell`** (`features/approvals/components/approval-status-cell.tsx`
+  — approvals-slice, per Review I1): status badge `Pending L{step}` with a
+  **locally-defined** amber/pending class (Review I2) + a supporting line
+  `Awaiting L{step} · {approverLabel(current_approver_name, isSelf)}` where
+  `isSelf = current_approver_id === viewerId`. **Guard the level** to
+  `step === 2 ? 'L2' : 'L1'` so the inbox's pending-only `current_step` can never
+  render `L0` (Review S1). **+ Vitest** (self shows "(you)"; other shows plain
+  name; step→L1/L2).
+  - *Personal vs all-org view (Review I3):* in the default inbox
+    (`findInboxForApprover`) every row's current approver **is** the viewer, so
+    every row shows "(you)" — this is intentional and consistent (it confirms
+    "this one is yours to action"); the marker's discriminating value is the
+    `canSeeAll` (HR / `APPROVAL:ApproveAny`) view where approvers vary. No
+    special-casing; one render path for both.
 - **1.2 Wire into `ApprovalsTable`**: rename the `Step` header to `Status`, render
   `<ApprovalStatusCell row viewerId />`; thread `viewerId` from `ApprovalsInbox`
   (`useAuth().user.id`) through the table. Cell is wrap-friendly (drop
