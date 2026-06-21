@@ -451,6 +451,50 @@ build`/`lint`; regenerate lockfile on Linux if changed. **Dependencies:** Tasks
 - [ ] Swagger shows the bulk route + the audit read route; grouped DTOs updated.
 - [ ] Plan doc reflects shipped reality; commit backend + frontend to their own `main`.
 
+### Phase 5 — Frontend surfaces for the audit + bulk backends (added 2026-06-21)
+
+Phase 4 landed the `compensation_audit` table (T10) and bulk-set-pay (T13) as
+**API-only** — T15's frontend scope didn't surface them. Phase 5 builds the two
+missing UIs so HR can actually use them from the browser. TDD (data layer +
+RTL component tests, the slice's established pattern).
+
+#### Task 16: Audit-trail UI (frontend)
+**Description:** Surface `GET /admin/compensation/:id/audit` in the admin page —
+a "View changes" affordance on the active rate opens the row's audit trail
+(newest-first), each entry showing the action (created/correction/removed), the
+money **before→after**, and when. Data-access via `keys.ts` + a query hook;
+shadcn-only; a pure `describeAuditChange` helper for the change string.
+**Acceptance criteria:**
+- [ ] `CompensationAuditSchema` + `adminCompensationApi.auditTrail(id)` (zod-parsed)
+  + `adminCompensationKeys.audit(id)`.
+- [ ] A correction (PATCH) then opening the trail shows an `updated` entry with
+  `before → after` salary and a `created` entry, newest first.
+- [ ] Loading / empty / error states; HR-gated (the page already requires ViewAll).
+**Verification:** vitest (schema parse, `describeAuditChange`, component render
+with mocked api) + `npm run build`/`lint`. **Dependencies:** T10. **Scope:** M.
+
+#### Task 17: Bulk set-pay UI (frontend)
+**Description:** A "Bulk set pay" flow on the admin page — add multiple
+`{employee, monthly_salary, effective_from}` rows and submit via
+`POST /admin/compensation/bulk`. Surfaces the all-or-nothing 422 (duplicate
+employee / bad row) as a single error; success toasts the count and invalidates
+affected employees.
+**Acceptance criteria:**
+- [ ] `BulkCreateCompensationSchema` + `adminCompensationApi.createBulk(items)`
+  + a `useBulkSetPay` mutation.
+- [ ] Add/remove rows, each with an employee picker + salary + effective-from;
+  submit disabled until ≥1 complete row; duplicate employee flagged client-side
+  before submit.
+- [ ] On 422 the per-field backend message surfaces; on success a count toast +
+  query invalidation.
+**Verification:** vitest (schema, component render: add row, submit calls api,
+dup guard) + `npm run build`/`lint`. **Dependencies:** T13. **Scope:** L.
+
+### Checkpoint: Phase 5 complete
+- [ ] Frontend lint/typecheck/test/build green; prettier clean (pre-push); regen
+  lockfile on Linux if changed.
+- [ ] Audit trail + bulk set-pay usable from the admin page; commit to frontend `main`.
+
 ## Risks and mitigations
 
 | Risk | Impact | Mitigation |
