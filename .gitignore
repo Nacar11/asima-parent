@@ -10,3 +10,7 @@
 asima-backend/
 asima-frontend/
 tasks/
+
+# Local-only seed assets (e.g. the mock attachment placeholder). Regenerated
+# locally — see the demo-seed-data plan. Not committed (binary, dev-only).
+public/
