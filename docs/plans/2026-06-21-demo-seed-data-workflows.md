@@ -260,3 +260,40 @@ module.
 - *Unique real documents* per row — the per-employee placeholder is reused across
   that employee's attachment rows.
 - Any schema/API change; the OT foundations (B/C/D/E); committing the binary asset.
+
+## Phase 2 — Varied pending leave (added 2026-06-21)
+
+**Why:** the seeded approvals inbox showed only identical `vacation, 2025-03-03`
+rows — pending_l1/l2 were all vacation on the same date. This enriches the
+**pending** leave so the inbox shows varied types, dates, and durations,
+including a pending `sick` with the placeholder cert for an approver to review.
+
+**Change (leave seeder + `buildLeaveRows` only — no schema/API/UI):** driven by
+each employee's index:
+- **Type rotation** on pending L1: `vacation → sick(+cert) → birthday → emergency`
+  (`index % 4`); `sick` falls back to vacation when the employee has no attachment.
+- **Staggered dates**: each employee's leave block starts on a different weekday
+  (no longer all `2025-03-03`).
+- **Duration variety**: a mix of single full days, **half-days**
+  (vacation/sick/emergency only — `birthday` is whole-day by policy), and a few
+  **2-day ranges**.
+- Pending L2 stays vacation at a distinct date (bounded complexity).
+
+**Half-day window:** derived from the employee's seeded `work_schedule`
+(`expected_in`..`break_start` = first half; `break_end`..`expected_out` = second).
+The service sets `start_time`/`end_time`; it downgrades a half-day to full when no
+schedule exists. (The app's `assertSubmittableRange` rejects past dates, so the
+seeder hand-computes the window — consistent with how it already hand-builds
+past-dated rows.)
+
+**Accepted trade-offs:**
+- **Reverses C1 for pending rows:** zero-grant types (`birthday`/`emergency`) in a
+  pending state reserve against a 0-day allocation → those types show a **negative
+  balance** on the employee's leave page. Accepted for demo realism (was option 4).
+- **Requires `npm run db:fresh`:** the date/type scheme changes and the seeder is
+  idempotent *per natural key*, so re-running `seed` on the existing DB would add
+  the new rows *alongside* the old all-vacation ones. `db:fresh` gives the clean set.
+
+**Tests:** extend `buildLeaveRows` unit tests (type rotation, sick→vacation
+fallback, half-day + 2-day durations, staggered dates, requires_attachment on
+sick); re-seed via `db:fresh` and verify inbox variety via SQL.
