@@ -30,11 +30,14 @@ seeded. This plan only enriches seed data for **tables that already exist**.
 1. **Repo-based seeders, one per table** (the existing pattern: each seed
    service inserts via its TypeORM repository, idempotent by natural key).
    Rejected service-driven seeding (needs JWT actors, throttling, harder
-   idempotency). The one exception is the single placeholder attachment (below),
-   which goes through the attachment service so `sharp`/MinIO produce valid
-   renditions.
+   idempotency). The one exception is the per-employee placeholder attachments
+   (below), which go through the attachment service so `sharp`/MinIO produce
+   valid renditions.
 2. **Attachment-backed leave IS seeded** (reversing the earlier "skip" lean),
-   using one shared **placeholder image** so sick/bereavement appear in the demo.
+   using a **placeholder image**. Attachments are **owner-scoped**
+   (`uploadForOwner` stamps `owner_id = employee_id`), so the placeholder is
+   created **per employee** that has a sick/bereavement row — not one global row
+   (review R1).
 3. **No schema or API changes.** Only new seed services + a `compensation.json`
    tweak + a gitignored placeholder asset.
 
@@ -70,8 +73,11 @@ seeded. This plan only enriches seed data for **tables that already exist**.
   row has ~10 interdependent fields. The seed service generates rows in code
   from a per-employee spec (`{ type, state, day_offset, portion? }`) and fills
   the derived fields once, so an inconsistent row is unrepresentable.
-- **I4 — corrections reference real time entries.** Each correction targets one
-  of the employee's seeded `time_entries` work_dates, with requested `out > in`.
+- **I4 — corrections use the real columns** (R2/R8): `target_entry_id`
+  (**nullable** — null for a "missing punch"), `work_date`, `proposed_time_in`
+  (NOT NULL), `proposed_time_out` (nullable; `> proposed_time_in` when present),
+  `reason` (NOT NULL). Seed a mix — some rows reference a seeded `time_entry`,
+  some leave `target_entry_id` null.
 - **I5 — status↔decision invariant, enforced centrally:** `pending_*` ⇒ all
   decision/cancel fields null; `approved`/`rejected` ⇒ `decided_at` +
   `decided_by` + `decision_path` set; `cancelled` ⇒ `cancelled_at` +
@@ -80,6 +86,29 @@ seeded. This plan only enriches seed data for **tables that already exist**.
   permission — only `PROJECT_MANAGER`/`TECHNICAL_DIRECTOR` hold `LEAVE:Approve` /
   `TIME_CORRECTION:Approve`, and `HR_ADMIN` holds the `ApproveAny` override. The
   org model therefore routes **only to PM / TD / HR**; Mary is an approvee only.
+
+### Second review pass (2026-06-21, R1–R9)
+
+- **R1 — attachments are owner-scoped**, so the placeholder is **per employee**
+  (`owner_id = employee_id`), not one shared row (folded into decision #2 + the
+  placeholder section + Task 2). Verified the inbox query surfaces seeded pending
+  rows correctly (`approvals.service.ts:62-79,135`) — the seed-to-surface
+  approach is sound.
+- **R2 — correct time-correction columns:** `target_entry_id` (nullable),
+  `proposed_time_in` (NOT NULL), `proposed_time_out` (nullable), `reason`
+  (NOT NULL) — not "time_entry_id / requested in-out" (folded into Task 3 + I4).
+- **R3 — the attachment path needs `StorageModule` wired into `SeedModule`**
+  (it currently imports only Config + TypeOrm). Added as an explicit Task 2
+  sub-step, with a lighter `storage.put` + repo-insert fallback noted.
+- **R4 — seeder attachment+leave is non-atomic** (the app does both in one txn);
+  the idempotency check (skip when the leave row exists) is the guard against
+  re-uploading / orphans.
+- **R7 — `reason` is NOT NULL on corrections;** every seeded correction sets one.
+- **R8 — `target_entry_id` is nullable:** seed a mix — some rows reference a
+  seeded entry, some are null ("missing punch").
+- **R9 — confirm the `approval_chains` active-row predicate** (entity
+  `started_at`/`ended_at` vs the migration's `effective_at` uniqueness) before
+  writing Task 1's idempotency check.
 
 ## The approval-chain org model
 
@@ -111,24 +140,35 @@ Per employee, generated from a compact spec so **every page has content**:
   balance impact). Consuming days per employee ≤ allocation.
 - **Time corrections** (~2 rows): one `pending_l1` and one `approved`/`rejected`,
   each targeting a seeded `time_entry` work_date with a valid requested window.
-- Attachment-required types (`sick`, `bereavement`) reference the shared
-  placeholder attachment.
+- Attachment-required types (`sick`, `bereavement`) reference a per-employee
+  placeholder attachment (R1).
 
 ## The placeholder attachment
 
-A single mock image stands in for medical-cert / death-notice uploads:
+A mock image stands in for medical-cert / death-notice uploads:
 
 - **Asset:** `asima-parent/public/seed-attachment-placeholder.png` (800×560 PNG,
   generated with `sharp`). `public/` is **gitignored** in `asima-parent` — the
   file is local/dev-only and regenerated from the snippet in this plan.
-- **Seeding:** the leave seeder, on first run, creates **one** `attachments` row
-  by handing the placeholder buffer to the attachment service (so `original` +
-  WebP `preview`/`thumbnail` land in MinIO and `has_versions`/`kind` are valid),
-  then references that one `attachment_id` from every seeded `sick`/`bereavement`
-  row. Idempotent: skip if the placeholder attachment already exists.
+- **Wiring (R3):** `uploadForOwner` lives in `AttachmentService`, which
+  `SeedModule` does **not** currently provide (it imports only `ConfigModule` +
+  `TypeOrmModule`). Task 2 must import `StorageModule` into `SeedModule` and
+  confirm `STORAGE_*` loads in the seed `ConfigModule`. **Fallback** if that's
+  heavy: a direct `storage.put` + `attachments` repo insert (then the seeder
+  must set `object_key_prefix`/`kind` itself and skip WebP versions).
+- **Seeding (R1):** for each employee with a seeded `sick`/`bereavement` row,
+  hand the placeholder buffer to `uploadForOwner({ file, owner_id: <employee>,
+  actor_id: <admin> })` so `original` + WebP versions land in MinIO and the
+  `attachments` row is valid; reference that **per-employee** `attachment_id`.
+  Idempotent: skip the whole row when the employee's leave row already exists.
+- **Non-atomic (R4):** unlike the app (attachment + leave row in one txn,
+  `leave-requests.service.ts:162`), the seeder uploads then inserts separately,
+  so a mid-run crash can orphan an attachment/object. Harmless for a dev seeder;
+  the "skip when the leave row exists" check prevents re-uploading on re-run.
 - **Best-effort:** if the placeholder file is absent (fresh clone, CI) **or**
-  MinIO is unreachable, the seeder **skips attachment-required rows with a log**
-  and seeds everything else — `npm run seed` never breaks.
+  MinIO is unreachable, the seeder **skips the sick/bereavement rows with a log**
+  (never seeding one with a null `attachment_id`) and seeds everything else —
+  `npm run seed` never breaks.
 
 Regenerate the placeholder:
 ```bash
@@ -148,6 +188,9 @@ applicable) active rows. Assert `approver_id !== employee_id`. Wire into
 - [ ] Every non-admin employee has ≥1 active chain row; PMs/EMPLOYEEs have a step 2.
 - [ ] No row has `approver_id == employee_id`; all approvers are PM/TD/HR.
 - [ ] `npm run seed` twice → no duplicate chains (idempotent by `(employee_id, step)`).
+**Prereq (R9):** confirm the active-row predicate before coding idempotency — the
+entity exposes `started_at`/`ended_at` but the migration's uniqueness uses
+`effective_at`; match whichever the partial unique index actually keys on.
 **Dependencies:** users. **Files:** `seeds/approval-chain/*`, `run-seed.ts`,
 `seed.module.ts`. **Scope:** M.
 
@@ -156,26 +199,35 @@ applicable) active rows. Assert `approver_id !== employee_id`. Wire into
 chains into a map (I1); for each employee generate rows from the compact spec
 (I3), filling approver + decision fields per the status↔decision invariant (I5);
 single weekday ranges (I2); consuming states use vacation/sick within allocation
-(C1); `pending_l2` only with a step-2 chain (C2). Create the one shared
-placeholder attachment (best-effort) for sick/bereavement rows.
+(C1); `pending_l2` only with a step-2 chain (C2). For each employee with a
+sick/bereavement row, create a **per-employee** placeholder attachment (R1),
+best-effort.
+**Sub-step (R3):** wire `StorageModule` into `SeedModule` (confirm `STORAGE_*`
+loads in the seed `ConfigModule`) so the seeder can call `AttachmentService.
+uploadForOwner`; or take the `storage.put` + repo-insert fallback.
 **Acceptance criteria:**
 - [ ] Approver inboxes (PM/TD/HR) show pending rows; approved/rejected/cancelled
   populate history; balances stay non-negative.
 - [ ] No `pending_l2` row for a single-level employee; no zero-grant type in a
   consuming state.
-- [ ] sick/bereavement rows reference the placeholder attachment when present;
-  skipped-with-log when the asset/MinIO is missing.
-- [ ] Idempotent by `(employee_id, leave_type, start_date)`.
+- [ ] Each sick/bereavement row references a **per-employee** placeholder
+  attachment (`owner_id = employee`); the whole row is skipped-with-log when the
+  asset/MinIO is missing (never seeded with a null `attachment_id`).
+- [ ] Idempotent by `(employee_id, leave_type, start_date)`; re-run does not
+  re-upload (skip when the leave row exists).
 **Dependencies:** Task 1, leave allocations, storage/MinIO (optional). **Files:**
 `seeds/leave-request/*`, `run-seed.ts`, `seed.module.ts`. **Scope:** L.
 
 ### Task 3: Time-correction seeder
 **Description:** `TimeCorrectionRequestSeedService` → `time_correction_requests`.
-Same chain-sourced approver + invariant logic; each row targets a seeded
-`time_entry` work_date (I4) with a valid requested window.
+Same chain-sourced approver + invariant logic. Columns (R2): `work_date`,
+`proposed_time_in` (NOT NULL), `proposed_time_out` (nullable), `reason`
+(NOT NULL, always set), `target_entry_id` (nullable — mix of seeded-entry and
+null "missing punch", R8).
 **Acceptance criteria:**
 - [ ] Correction inboxes show pending rows; resolved ones populate history.
-- [ ] Every row references an existing time entry; requested `out > in`.
+- [ ] `proposed_time_out > proposed_time_in` when present; `reason` set on every
+  row; `target_entry_id` references a seeded entry or is null.
 - [ ] Idempotent by `(employee_id, work_date)`.
 **Dependencies:** Task 1, time entries. **Files:**
 `seeds/time-correction/*`, `run-seed.ts`, `seed.module.ts`. **Scope:** M.
@@ -200,8 +252,11 @@ module.
 | Hand-built rows violate a CHECK / balance goes negative | Med | Generate-from-spec (I3) + invariant helpers (C1/I2/I5); seed sanity spec |
 | Placeholder/MinIO missing in CI breaks seed | Med | Attachment seeding is best-effort, skip-with-log (best-effort clause) |
 | Approver routed to someone who can't act | Med | Org model routes only to PM/TD/HR (S3); assert in seeder |
-| Re-run creates orphan attachments | Low | Single shared placeholder attachment, created once, idempotent |
+| Cross-owner attachment fails view/download authz | Med | Placeholder is **per employee** (`owner_id = employee`), not shared (R1) |
+| Orphan attachment on a mid-run crash (non-atomic, R4) | Low | Skip when the leave row exists → no re-upload; harmless dev artifact |
+| StorageModule won't wire cleanly into SeedModule (R3) | Med | Confirm `STORAGE_*` in seed config; fallback = `storage.put` + repo insert |
 
 ## Out of scope
-- Sick/bereavement with *unique per-row* attachments (one shared placeholder only).
+- *Unique real documents* per row — the per-employee placeholder is reused across
+  that employee's attachment rows.
 - Any schema/API change; the OT foundations (B/C/D/E); committing the binary asset.
