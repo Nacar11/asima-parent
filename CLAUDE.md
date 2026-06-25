@@ -151,7 +151,8 @@ snapshot solves that — it's what we agreed to do at the start; the
 - `asima-parent/docs/adr/` — architectural decisions. Read the relevant
   ADR before changing the area it covers.
 - `asima-parent/docs/universal-guidelines/module-architecture.md` —
-  hexagonal layering blueprint every backend module follows.
+  Domain-Driven Design blueprint every backend module follows (aggregates,
+  value objects, domain events, repository ports).
 - `asima-parent/docs/universal-guidelines/database-migration-conventions.md`
   — one table = one CREATE migration; edit CREATE (not a new ALTER) while a
   table's migration is still unreleased.
@@ -162,7 +163,7 @@ snapshot solves that — it's what we agreed to do at the start; the
   (shadcn-only, no parallel UI sources).
 - `asima-parent/docs/universal-guidelines/frontend-architecture.md` —
   feature-sliced layering, the data-access/`keys.ts` rules, and the explicit
-  decision NOT to use hexagonal on the frontend.
+  decision NOT to mirror the backend's DDD layering on the frontend.
 - `asima-parent/docs/universal-guidelines/ci-cd-and-quality-gates.md` —
   the CI workflows + Husky pre-push hooks across all three repos: what's
   enforced where, the standard stack, CI secrets handling, and recipes.
@@ -173,8 +174,8 @@ snapshot solves that — it's what we agreed to do at the start; the
 
 - Don't add features beyond what the task requires. v0 is deliberately
   scoped to identity; flag scope drift instead of silently expanding it.
-- Prefer editing existing files over creating new ones. The hexagonal
-  layout means every concern already has a home — find it before adding a
+- Prefer editing existing files over creating new ones. The DDD layout
+  means every concern already has a home — find it before adding a
   new file.
 - For any non-trivial backend change, the layered file set
   (domain → persistence → service → controller) must move together. A

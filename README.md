@@ -12,7 +12,7 @@ each with its own git `origin` and `main`.
 
 | Path | Repo | What |
 |---|---|---|
-| `asima-backend/` | [`Nacar11/asima-backend`](https://github.com/Nacar11/asima-backend) | NestJS + TypeORM + PostgreSQL API. Hexagonal per module. |
+| `asima-backend/` | [`Nacar11/asima-backend`](https://github.com/Nacar11/asima-backend) | NestJS + TypeORM + PostgreSQL API. Domain-Driven Design per module. |
 | `asima-frontend/` | [`Nacar11/asima-frontend`](https://github.com/Nacar11/asima-frontend) | Next.js (App Router) SPA. Feature-sliced. |
 | `docs/` | this repo | All committed docs (see below). |
 | `CLAUDE.md` | this repo | System-level brief across frontend + backend. |
@@ -54,5 +54,5 @@ its own runbook (cloned as a sibling directory next to this one):
   terminology, the admin / self-service contract, API conventions.
 - [`docs/universal-guidelines/`](./docs/universal-guidelines/) — the
   authoritative guidelines, one source per layer.
-- Each sub-repo's `CLAUDE.md` — repo-specific rules (hexagonal layout on the
+- Each sub-repo's `CLAUDE.md` — repo-specific rules (Domain-Driven Design on the
   backend, feature-sliced layering on the frontend).

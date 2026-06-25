@@ -30,18 +30,18 @@ lib/                 api-client (single HTTP entry; token+refresh injected at
                      request-id. Never imports from features.
 ```
 
-## 2. The decision: harden FSD; reject hexagonal
+## 2. The decision: harden FSD; don't mirror the backend's layering
 
-We deliberately do **not** port the backend's hexagonal
-domain/ports/adapters/mappers layering onto the frontend.
+We deliberately do **not** port the backend's Domain-Driven Design layering
+(aggregates / value objects / ports / mappers) onto the frontend.
 
-**Why not.** Hexagonal exists to isolate pure business logic from
+**Why not.** That layering exists to isolate pure business logic from
 infrastructure. On a frontend, the **backend owns the domain**, and **React
 Query is the infrastructure/state layer**. Adding `domain/ → ports/ →
 adapters/` would mostly produce pass-through mappers wrapping data already
 validated by zod — backend-level ceremony protecting a layer with little
-independent logic. The two hexagonal ideas that do pay off on a frontend are
-already present:
+independent logic. The two ideas from that layering that do pay off on a
+frontend are already present:
 
 - **Anti-corruption boundary:** every `api.ts` validates responses with zod,
   so the frontend has its own contract decoupled from raw backend JSON.
@@ -66,8 +66,8 @@ already present:
    barrel; cross-slice imports go through it, never into another slice's
    internals. Enforced by ESLint `no-restricted-imports`.
 5. **Documented, including the rejected option.** `asima-frontend/CLAUDE.md`
-   records the above plus the explicit no-hexagonal decision and rationale,
-   so it is not re-litigated.
+   records the above plus the explicit decision not to mirror the backend's
+   DDD layering, and the rationale, so it is not re-litigated.
 
 ## 4. State model
 
