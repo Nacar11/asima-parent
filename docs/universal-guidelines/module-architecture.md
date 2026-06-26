@@ -370,6 +370,28 @@ together in one transaction, everything outside is referenced by ID.
   inbox), infrastructure adapters (e.g. object storage), and **derived
   read-models** (e.g. a computed balance) which are projected, never written.
 
+### 6.1 The creation-only (append-only ledger) aggregate
+
+A small but recurring variant: an **append-only ledger** — rows are inserted,
+never mutated, and "revocation" is a soft-delete, not an UPDATE. It has a
+creation invariant but no lifecycle, so it carries **only a static creation
+guard** and consciously omits the load-mutate-save apparatus the §2/§11
+templates assume: **no** `extends AggregateRoot`, **no** `reconstitute`, **no**
+`mapper.toAggregate`, **no** event buffer / `pullEvents()`. Those exist in
+`leave-requests` solely because approve/reject/cancel load-mutate-save; in a
+ledger they would be dead code. The creation event is built and published by
+the use-case **after** the insert (so it carries the DB-generated id), exactly
+as `leave-requests` submit does — there is no buffered, id-less event.
+
+Reference: `src/leave-allocations/` — `LeaveAllocation.assertGrantable(amount)`
+is the whole aggregate (it returns the validated `AllocationAmount` the use-case
+persists); `LeaveAllocationGranted` is published post-commit. Use this shape
+**only** when the table genuinely has no mutation path; the moment an
+update/transition lands, promote it to the full §3.1 aggregate. When you take
+this variant, the load-path rows of the §11 checklist (`reconstitute`,
+`toAggregate`, `findAggregateById`) are **intentionally N/A** — note it in the
+module's plan so the deviation reads as sanctioned, not as an oversight.
+
 Mapping the modules to aggregates (root, children, referenced-by-id) before
 writing code is the highest-leverage step in a new module.
 
