@@ -223,6 +223,20 @@ sites.
 3. **Reconstitution lives at the persistence seam:** `mapper.toAggregate(entity)`
    rebuilds the rich aggregate; `mapper.toDomain(entity)` builds the plain
    data record for read paths. The repo never returns entities.
+   - **3a. Variant — reconstitute from a held record.** When **every** write
+     path already holds the persisted `<Root>Record` for an independent I/O
+     reason (it was loaded for a `deleted_at`/ownership check, or returned by a
+     `findOpenFor…`/lookup that decided the branch), a dedicated
+     `findAggregateById` + `mapper.toAggregate` would issue a **redundant second
+     query** and sit unused. Such a module keeps `mapper.toDomain` only and
+     reconstitutes **use-case-side** via the public `<Root>.reconstitute(record)`.
+     This is a sanctioned deviation from rule 3's `toAggregate` seam — and is
+     **distinct from the §6.1 ledger**, which omits reconstitution entirely
+     because it has *no* mutation path; here the module *does* load-mutate-save,
+     it just already has the record in hand. Note it in the module's plan; the
+     §11 load-path rows (`findAggregateById`, `toAggregate`) read **N/A**.
+     Reference: `time-entries` — `close` ← the open-entry lookup,
+     `applyCorrection` ← the target `deleted_at` check.
 4. The repo **never throws `NotFoundException`** — it returns `… | null`; the
    service owns the 404.
 5. The repo **respects `deleted_at IS NULL`** unless the caller opts into
