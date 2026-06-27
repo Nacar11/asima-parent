@@ -142,10 +142,11 @@ cascade versioning path (decision #7); converting leave/TC/users/etc.
      builds `WorkWindow` + `Break`, runs `assertBreakWithinWindow`, and
      **returns `{ window, brk }`** so the use-case persists without rebuilding.
      Maps each VO error to its 422 field.
-   - `endLogically(effective_to: Date|string)` — the logical-end transition: set
-     `effective_to`, guard "already ended" stays **use-case-side** (it is a
-     read of current state → 409, like the one-open guard); records
-     `WorkScheduleEnded`. Load-mutate-save.
+   - `endLogically(effective_to: string)` — the logical-end transition: set
+     `effective_to` (a `YYYY-MM-DD` date string, matching the record/column
+     type), guard "already ended" stays **use-case-side** (it is a read of
+     current state → 409, like the one-open guard); records `WorkScheduleEnded`.
+     Load-mutate-save.
    - Derived/read accessors the use-case needs for the persist patch
      (`id`, `employee_id`, `day_of_week`, `expected_in`, `expected_out`,
      `break_minutes`, `break_start`, `effective_from`, `effective_to`).
@@ -198,8 +199,13 @@ cascade versioning path (decision #7); converting leave/TC/users/etc.
    | `InvalidBreakError` (carries `field`) | 422 | `unprocessable(err.field, …)` |
 
    A `rethrowWorkScheduleDomainError(err)` helper does the mapping (mirrors
-   `rethrowTimeEntryDomainError`). The one-active 409, already-ended 409,
-   `23505` 409, and 404 stay **direct use-case throws** (I/O-bound). Preserve
+   `rethrowTimeEntryDomainError`). **Both `WorkSchedulesService` and
+   `ScheduleChangeService.validate` route `assertSchedule` through it** — the
+   aggregate guard throws *domain* errors (to stay framework-free), so every
+   caller must map them; the old free functions threw `unprocessable(...)`
+   directly, so this catch/rethrow is new at each call site (I-1). The
+   one-active 409, already-ended 409, `23505` 409, and 404 stay **direct
+   use-case throws** (I/O-bound). Preserve
    message strings verbatim: `'expected_out must be strictly after expected_in'`,
    `'break_minutes must be >= 0'`, `'break_start is required when break_minutes
    > 0'`, `'break_start must be on or after expected_in'`, `'the break must end
@@ -343,18 +349,23 @@ validation + `break_start` clear-to-null, `endLogically` (event + already-ended
 
 #### Task 5: Cascade rewire + cross-module retypes (frozen behavior)
 **Acceptance criteria:**
-- [ ] `cascade-policy.ts` — retype `WorkSchedule` → `WorkScheduleRecord`
-      everywhere (`planVersioning`, `windowChanged`, `breakChanged`,
-      `evaluateLeave`, `evaluateCorrection`). **No logic change.** Its spec stays
-      green unchanged (or only the type import updates).
+- [ ] `cascade-policy.ts` **and `cascade-policy.spec.ts`** — retype `WorkSchedule`
+      → `WorkScheduleRecord` everywhere (`planVersioning`, `windowChanged`,
+      `breakChanged`, `evaluateLeave`, `evaluateCorrection`; the spec's import +
+      any `as WorkSchedule` fixtures). **No logic change** — the spec stays green
+      on the rename alone (S-4).
 - [ ] `schedule-change.service.ts` — `validate` swaps `assertWindowOk` /
-      `assertBreakOk` for `WorkSchedule.assertSchedule` (same 422 fields +
-      messages); retype `WorkSchedule` → `WorkScheduleRecord` (incl.
-      `applyVersioning`'s `live` param and `created_row`). **Versioning path
-      unchanged** (decision #7 — direct repo calls, no events). Remove the now-
-      unused `assertWindowOk`/`assertBreakOk` exports from
-      `work-schedules.service.ts` **only after** confirming no other importer
-      (grep) — else keep as thin re-exports delegating to the aggregate guard.
+      `assertBreakOk` for `WorkSchedule.assertSchedule`, **wrapped in
+      `rethrowWorkScheduleDomainError`** so the domain errors map to the same
+      422 fields + messages (I-1 — the old free functions threw `unprocessable`
+      directly; the aggregate guard throws domain errors). Retype `WorkSchedule`
+      → `WorkScheduleRecord` (incl. `applyVersioning`'s `live` param and
+      `created_row`). **Versioning path unchanged** (decision #7 — direct repo
+      calls, no events).
+- [ ] **Delete** the `assertWindowOk` / `assertBreakOk` exports from
+      `work-schedules.service.ts` — grep confirms the cascade is their **only**
+      external importer, and it's rewired above, so they go outright (no shim /
+      re-export — S-2).
 - [ ] `leave-requests/leave-day-count.service.ts` (+ its `.spec.ts`) — import
       `WorkScheduleRecord` instead of `WorkSchedule`; retype the two annotations.
       **No logic change.** Re-run its unit spec (day-count math frozen).
@@ -370,14 +381,21 @@ cascade + the leave-day-count seam). Review the cascade rewire separately.
 - [ ] Relocate `AffectedRequest` / `ScheduleChangeImpact` /
       `ScheduleChangeResult` to `dto/response/schedule-change-response.dto.ts`
       (carry `@ApiProperty`); strip `@ApiProperty` from the `domain/
-      schedule-change.ts` working types. `created_row` →
+      schedule-change.ts` working types. **The cascade service keeps returning
+      the domain types; only the controller's import flips to `dto/response/`**
+      (I-2). The response DTOs **replicate the `ScheduleChangeResult extends
+      ScheduleChangeImpact` inheritance**, and `created_row` →
       `WorkScheduleResponseDto | null`.
 - [ ] `work-schedule.assembler.ts` (`toResponse` / `toPaginatedResponse`) +
-      `schedule-change.assembler.ts` (`toImpactResponse` / `toResultResponse`).
+      `schedule-change.assembler.ts` (`toImpactResponse` / `toResultResponse` —
+      the latter **maps the nested `created_row` through
+      `WorkScheduleAssembler.toResponse`**, I-2).
 - [ ] All three controllers return DTOs via the assemblers; preserve **verbatim**
       every `@Permissions({ SCHEDULE: … })`, `@ApiTags`, `@ApiBearerAuth`, the
       `version: API_VERSION` mount, the `/me` vs `/admin/:id` split, the
-      preview/apply mounts, and the DELETE→logical-end 200.
+      preview/apply mounts, and the DELETE→logical-end 200. The `/me` endpoint
+      returns a **plain array** (`findActiveForEmployee`) → `rows.map(
+      WorkScheduleAssembler.toResponse)`, **not** `toPaginatedResponse` (S-3).
 - [ ] `WorkSchedulesModule` provides `DomainEventPublisher`.
 - [ ] Update `main.ts` Swagger groups: `WorkSchedule` →
       `WorkScheduleResponseDto`; add the relocated cascade DTOs to the group.
@@ -426,6 +444,27 @@ carries no `@ApiProperty`. **Dependencies:** Tasks 4–5. **Scope:** Medium.
 | JSON drift (field order / cascade DTO relocation) | Med | `mapper.toDomain` order == legacy; response DTOs mirror `@ApiProperty` verbatim; e2e parity guards. |
 | One-active invariant weakened | **High** | Keep the partial unique index + the `23505` → 409 mapping in the use-case (blueprint §7); don't move it onto the aggregate. |
 | Over-building (actor / 3rd VO / findAggregateById / cascade events) | Low | Decisions #2/#4/#5/#7/#10: two VOs only; no actor, no `findAggregateById`, no cascade events (YAGNI). |
+
+## Plan-review pass (2026-06-27)
+
+A five-axis review of this plan against the live code tightened it before
+implementation:
+
+- **I-1 — cascade error mapping.** `ScheduleChangeService.validate` today calls
+  `assertWindowOk`/`assertBreakOk`, which throw HTTP `unprocessable(...)`
+  directly. The replacement `WorkSchedule.assertSchedule` is an aggregate guard
+  that throws **domain** errors, so `validate` (and the service) must wrap it in
+  `rethrowWorkScheduleDomainError` — otherwise the cascade's 422s become
+  unmapped 500s. Spelled out in decision #8 + Task 5.
+- **I-2 — relocated cascade DTOs.** Made explicit that the service keeps
+  returning the domain read-models, only the controller's import flips to
+  `dto/response/`, the DTOs replicate the `Result extends Impact` inheritance,
+  and the assembler maps the nested `created_row` → `WorkScheduleResponseDto`.
+- **S-1** — `endLogically(effective_to: string)` (was `Date|string`; it's a date
+  string). **S-2** — `assertWindowOk`/`assertBreakOk` are deleted outright (grep:
+  the cascade is their only external importer), no re-export shim. **S-3** — the
+  `/me` endpoint returns a plain array, mapped per-item (not paginated). **S-4** —
+  `cascade-policy.spec.ts` is named explicitly in the retype set.
 
 ## Decisions & open questions
 
