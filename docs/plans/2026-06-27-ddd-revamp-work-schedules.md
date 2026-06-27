@@ -427,12 +427,18 @@ carries no `@ApiProperty`. **Dependencies:** Tasks 4–5. **Scope:** Medium.
 | One-active invariant weakened | **High** | Keep the partial unique index + the `23505` → 409 mapping in the use-case (blueprint §7); don't move it onto the aggregate. |
 | Over-building (actor / 3rd VO / findAggregateById / cascade events) | Low | Decisions #2/#4/#5/#7/#10: two VOs only; no actor, no `findAggregateById`, no cascade events (YAGNI). |
 
-## Open questions
+## Decisions & open questions
 
-1. **`Break` as one VO vs. folding into `WorkWindow`?** Plan splits them (a
-   break is conceptually distinct and independently nullable). Revisit if the
-   cross-VO `assertBreakWithinWindow` feels awkward in implementation.
-2. **Cascade `ScheduleVersioned` event** — deferred (decision #7). Add when a
-   subscriber needs it (DTR recompute on schedule change).
-3. **Commit timing:** commit this snapshot now, or after review?
+1. **`Break` is its own value object — DECIDED (2026-06-27).** Split from
+   `WorkWindow`: a break is conceptually distinct and independently nullable, so
+   each VO stays cohesive. The cross-VO "break fits the window" rule lives on the
+   aggregate (`assertBreakWithinWindow`, decision #3), not inside either VO.
+2. **Cascade `ScheduleVersioned` event — DEFERRED (decision #7).** Not added in
+   this revamp. It would be a single domain event for the cascade's forward
+   versioning (old row ended **and** new row created as one fact — richer than
+   separate `WorkScheduleEnded`+`WorkScheduleCreated`), the natural hook for a
+   future DTR-recompute-on-schedule-change subscriber. Deferred because no
+   subscriber needs it yet and the cascade transaction is behavior-frozen; add
+   it with that feature, not here.
+3. **Commit timing:** snapshot committed 2026-06-27.
 ```
