@@ -415,14 +415,22 @@ implementation:
 
 ## Open questions
 
-1. **Domain events vs. the existing audit (the key call).** Compensation is the
-   one module where the events seam **overlaps** a first-class transactional
-   audit that already records every write with before→after values. **Lean:
-   include the minimal `Granted`/`Corrected`/`Deleted` set** for consistency with
-   the 5 prior revamps + a plausible OT-recompute / pay-notification consumer,
-   keeping the audit separate (decision #6/#7). **But skipping events here is
-   defensible** (the audit already records; the time-correction "don't build
-   what nothing reads" lesson) — confirm before Task 2 builds them.
+1. **Domain events vs. the existing audit (the key call). — RESOLVED 2026-06-28:
+   SKIP events.** Compensation is the one module where the events seam
+   **overlaps** a first-class transactional audit that already records every write
+   with before→after values. The lean was to include the minimal
+   `Granted`/`Corrected`/`Deleted` set for consistency with the 5 prior revamps,
+   **but the call was to skip**: the audit already records every write
+   transactionally, nothing reads events today (grep-confirmed no consumer), and
+   adding one when an OT-recompute / pay-notification consumer actually lands is a
+   non-breaking ~5-line change (the time-correction "don't build what nothing
+   reads" lesson). **Consequences for the plan below:** no
+   `domain/events/compensation-events.ts`, no `pullEvents()`/`publish()` in the
+   use-case, no `DomainEventPublisher` provider in `CompensationModule`. The
+   aggregate still gets `correct()` / `assertNotFuture` / `PayRate.fromInput`, and
+   the audit stays inline-transactional (decision #6 untouched). Decision #7 (the
+   events seam) is therefore **dropped**; references to events in the dependency
+   graph, Task 2, Task 4, and Task 5 below are superseded by this resolution.
 2. **`PayRate` invariant scope.** Plan validates `>= 0` only (the DTO owns the
    real `@Min`/positivity at the edge). Tighten if the aggregate should re-assert
    a stricter bound at reconstitute.
