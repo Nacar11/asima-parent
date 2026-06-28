@@ -209,13 +209,21 @@ it anyway.) **Dependencies:** None (independent of Tasks 1–3). **Scope:** Smal
 | Churn for marginal gain (skill's "maintain balance" caution) | Low | Scoped to genuine ≥6× duplication + the live e2e guard; the `toDto` atom also centralizes the structural-copy rationale (one doc home, not six). |
 | Loose `src: object` typing hides a field mismatch | Low | Matches today's untyped `Object.assign`; the DTO is the wire contract and e2e guards it. Tightening to `Partial<T>` would break list-items (which carry extra fields) — deliberately not done. |
 
+## Decisions (2026-06-28)
+
+1. **Two commits — DECIDED.** Reuse (Tasks 1–3) and the dead-code sweep (Task 4)
+   ship as separate commits: independent concerns, cleaner history, easier revert.
+2. **Include `toDto` — DECIDED.** All three helpers ship (`toDto` /
+   `toPaginatedDto` / `toDtoList`). `toDto` buys uniformity (every assembler
+   method delegates to a named helper, no raw `Object.assign` scattered) and one
+   home for the structural-copy rationale.
+
 ## Open questions
 
-1. **One commit or two?** Plan splits: reuse (Tasks 1–3) and dead-code (Task 4)
-   are independent concerns → two commits (cleaner history, easier revert).
-   Confirm, or fold into one.
-2. **`toDto` vs. keeping idiomatic `Object.assign`?** The single-object atom is
-   the most marginal (both are one line); the real win is `toPaginatedDto` /
-   `toDtoList`. Including `toDto` buys uniformity + one rationale home. If you'd
-   rather keep `Object.assign` inline and only extract the paginated/list
-   helpers, that's a smaller, still-valid variant.
+1. **`toDtoList` under the rule-of-three (review finding R-1).** It has only
+   **2** call sites today (`leave-allocation.toResponseList`,
+   `leave-request.toBalanceResponseList`) vs. `toPaginatedDto` (4) and `toDto`
+   (10). Kept for symmetry — a list-of-DTOs is the most fundamental mapping
+   shape and a 3rd use is near-certain as modules grow — but flag at
+   implementation if it still feels premature; the fallback is inlining the 2 as
+   `list.map((x) => toDto(Dto, x))`.
