@@ -109,14 +109,24 @@ decision #6); converting `users`/`approval-chains`/etc.
    time-entries / work-schedules).
 
 5. **Behavior on the aggregate** (lifts the duplicated rules):
-   - **Static creation guard** (insert-id-bound, like leave-allocations §6.1 —
-     no full factory): `assertGrantable(monthly_salary, hourly_rate?,
-     effective_from, today)` runs the not-future guard **and** builds + returns
-     the `PayRate` VO, so the use-case persists the derived rate without
-     rebuilding. Maps to the right 422 field.
-   - **Static `assertNotFuture(effective_from, today)`** — the future-date rule
-     (lexicographic on `YYYY-MM-DD`); `today` is fed by the use-case
-     (`businessDateString()`), keeping the aggregate pure.
+   - **Two separate static guards — NOT one combined `assertGrantable` (I-1).**
+     The not-future check and the rate derivation fire at **different times**
+     today and must stay split to preserve behavior:
+     - **`assertNotFuture(effective_from, today)`** — the future-date rule
+       (lexicographic on `YYYY-MM-DD`); `today` fed by the use-case
+       (`businessDateString()`). The use-case calls it **up-front, before any DB
+       work** — single create before the transaction (`service.ts:43`), and
+       **bulk `forEach` before the transaction opens** (`:72`: every batch item
+       is validated before the first write). Bundling it into a creation factory
+       would push the bulk check inside the per-item loop/transaction (partial
+       write + rollback instead of pre-write reject) — a behavioral drift.
+     - **`PayRate.fromInput(monthly_salary, hourly_rate?)`** — the derivation,
+       called **inside** `insertWithin` (in the transaction), exactly where
+       `service.ts:100` derives today. Returns the validated `PayRate` the
+       use-case persists.
+     There is **no combined `assertGrantable`** (the leave-allocations §6.1
+     analogy doesn't map — compensation splits validation across the transaction
+     boundary).
    - **`correct(patch, today)`** — the in-place correction transition (load-
      mutate-save): re-derive via `PayRate.fromInput` when `monthly_salary` or
      `hourly_rate` is patched (salary change re-derives + **clears** override;
@@ -205,7 +215,7 @@ decision #6); converting `users`/`approval-chains`/etc.
 ```
 PayRate VO + errors                                                     [Task 1]
    └─> CompensationRecord + CompensationAudit(Record) + aggregate
-        (assertGrantable / correct / assertNotFuture) + events           [Task 2]
+        (PayRate.fromInput / assertNotFuture / correct) + events         [Task 2]
          ├─> mappers (toDomain → records) + ports (retype; keep manager;
          │     NO findAggregateById)                                      [Task 3]
          │      └─> CompensationService (create/bulk/insertWithin/update/
@@ -248,17 +258,18 @@ green only at Checkpoint B**; Checkpoint A is domain-unit-green only.
 - [ ] `domain/compensation-audit.ts` → `CompensationAuditRecord`: strip
       `@ApiProperty`; stays a plain append-only record (decision #6).
 - [ ] `domain/compensation.aggregate.ts` → `Compensation extends AggregateRoot`:
-      private ctor (builds `PayRate`), `reconstitute`, static `assertGrantable`
-      (returns `PayRate`), static `assertNotFuture(date, today)`,
-      `correct(patch, today)`, read accessors. Records `CompensationCorrected` on
-      correction. Corrupt row (`monthly_salary < 0`) throws on `reconstitute`.
+      private ctor (builds `PayRate`), `reconstitute`, static
+      `assertNotFuture(date, today)`, `correct(patch, today)`, read accessors
+      (derivation lives on `PayRate.fromInput`, not a combined `assertGrantable`
+      — I-1). Records `CompensationCorrected` on correction. Corrupt row
+      (`monthly_salary < 0`) throws on `reconstitute`.
 - [ ] `domain/events/compensation-events.ts` — `CompensationGranted(id,
       employee_id, effective_from)`, `CompensationCorrected(id, employee_id)`,
       `CompensationDeleted(id, employee_id)`.
 
-**Verification:** `npm test -- compensation.aggregate` green (reconstitute →
-correct → assert state + `pullEvents()`; assertGrantable derive/override;
-assertNotFuture; corrupt-row throw). Domain framework-free.
+**Verification:** `npm test -- compensation.aggregate pay-rate` green
+(reconstitute → correct → assert state + `pullEvents()`; `PayRate.fromInput`
+derive/override; `assertNotFuture`; corrupt-row throw). Domain framework-free.
 **Dependencies:** Task 1. **Scope:** Medium.
 
 ### Checkpoint A — Domain core
@@ -276,23 +287,29 @@ assertNotFuture; corrupt-row throw). Domain framework-free.
       retypes to `CompensationAuditRecord`. **No `toAggregate`.**
 - [ ] Both ports retyped to the records on all reads **and** create/update;
       **every `manager?: EntityManager` preserved**. **No `findAggregateById`.**
-      Repos return records, never entities, never throw 404.
+      Repos return records, never entities, never throw 404. The audit port's
+      **`RecordCompensationAuditInput` interface stays frozen** (S-2 — the
+      use-case builds it verbatim); only its return type retypes to
+      `CompensationAuditRecord`.
 - [ ] At this task, `tsc` may be red project-wide until Task 4/5.
 
 **Dependencies:** Task 2. **Scope:** Medium.
 
 #### Task 4: Application layer (thin use-case)
 **Acceptance criteria:**
-- [ ] `create` / `createBulk` → `insertWithin`: `assertGrantable` (422 not-future
-      + PayRate) → `findActiveForEmployee` → `effective_from > prior` guard (422)
-      → end-date prior (`dayBefore`) → `create` (derived PayRate) with `23505` →
-      409 → `auditRepo.record(CREATED)` **inside the tx** → publish
-      `CompensationGranted` post-commit. Bulk duplicate-id 422 + per-item
-      not-future preserved.
+- [ ] `create` / `createBulk`: **`assertNotFuture` up-front** (single before the
+      tx; **bulk `forEach` before the tx** — all items validated pre-write, I-1)
+      + bulk duplicate-id 422 → then `insertWithin` (in the tx): `PayRate
+      .fromInput` derivation → `findActiveForEmployee` → `effective_from > prior`
+      guard (422) → end-date prior (`dayBefore`) → `create` (derived PayRate)
+      with `23505` → 409 → `auditRepo.record(CREATED)` **inside the tx** →
+      publish `CompensationGranted` post-commit.
 - [ ] `update` — `findById` (404) → `reconstitute` → `aggregate.correct(patch,
       today)` → `repository.update(id, patch)` + `auditRepo.record(UPDATED,
       before→after)` **in one tx** → publish `CompensationCorrected`. Re-derive
-      rule + clear-override preserved exactly.
+      rule + clear-override preserved exactly, **including the `effective_from`-
+      only patch ⇒ no rate-field change** branch (S-1 — add a test; the current
+      spec doesn't cover it).
 - [ ] `softDelete` — `findById` (404) → historical-row 409 → tx: soft-delete
       active → reactivate prior (`findPreviousForEmployee` → `update
       effective_to=null`) → `auditRepo.record(DELETED)` → publish
@@ -303,10 +320,13 @@ assertNotFuture; corrupt-row throw). Domain framework-free.
       (one-active/prior-date/bulk-dup/historical-delete/`23505`/404) unchanged.
 
 **Verification:** `npm test -- compensation.service` green: mocks both ports +
-publisher + a fake `EntityManager`/`DataSource`; asserts set-pay (end prior +
-insert + audit + event), the one-active 409 (incl. `23505`), the
-`effective_from > prior` 422, the not-future 422, update re-derivation +
-clear-override + audit before→after, softDelete reactivation + historical 409.
+publisher + a fake `EntityManager`/`DataSource` (keep the existing
+sentinel-`'MGR'` `transaction` mock); asserts set-pay (end prior + insert +
+audit + event), the one-active 409 (incl. `23505`), the `effective_from > prior`
+422, the not-future 422, **bulk rejects a future-dated item before any write**
+(I-1 ordering), update re-derivation + clear-override + audit before→after, **the
+`effective_from`-only patch leaves the rate untouched** (S-1), softDelete
+reactivation + historical 409.
 **Dependencies:** Task 3. **Scope:** Large — the transactional audit + the
 effective-dating orchestration are the risk; review `insertWithin` and
 `softDelete` separately.
@@ -367,6 +387,31 @@ carries no `@ApiProperty`. **Dependencies:** Task 4. **Scope:** Medium.
 | Dropped `EntityManager` params → transactions break | **High** | Decision #10/Task 3: preserve every `manager?: EntityManager` on both retyped ports. |
 | JSON drift (`currency` non-column field / field order / audit shape) | Med | `mapper.toDomain` order == legacy incl. the `currency` fill; response DTOs mirror `@ApiProperty` verbatim; fix the `$ref` names; e2e parity guard. |
 | Over-building (events that duplicate the audit / EffectiveDate VO / findAggregateById) | Low | Decisions #3/#6/#7/#10: one VO (`PayRate`); audit stays a record; no `EffectiveDate` VO; no `findAggregateById`; events flagged as open question #1. |
+
+## Plan-review pass (2026-06-28)
+
+A five-axis review against the live code tightened the plan before
+implementation:
+
+- **I-1 — split the creation guard.** The original `assertGrantable` bundled the
+  not-future check with the rate derivation, but they fire at **different times**
+  today: not-future is **up-front, pre-transaction** (single `:43`; bulk
+  `forEach` `:72` — all items before any write), while derivation is **in the
+  transaction** (`:100`). Bundling would push the bulk check inside the per-item
+  loop (partial-write-then-rollback instead of pre-write reject). Fixed:
+  use-case calls `assertNotFuture` up-front; `PayRate.fromInput` derives inside
+  `insertWithin`; no combined `assertGrantable` (decision #5, Tasks 2/4).
+- **S-1 — `effective_from`-only correction.** The existing spec covers the three
+  rate-change branches but not "no rate field patched ⇒ rate unchanged". `correct`
+  must preserve it; Task 4/6 adds the test.
+- **S-2 — frozen audit input.** `RecordCompensationAuditInput` (the interface the
+  use-case hands `auditRepo.record`) stays verbatim; only its return retypes
+  (Task 3).
+- **Affirmed:** decision #6 (audit inline-transactional, not an event subscriber)
+  is correct and grounded in the audit port's `manager?` design; the batched OT
+  seam stays N/A for N+1; pay routes' `COMPENSATION:*`/`ViewOwn` gating is right.
+- **FYI:** bulk's per-item `findActiveForEmployee` is pre-existing (import path),
+  not a regression — don't "optimize" it in this behavior-preserving change.
 
 ## Open questions
 
