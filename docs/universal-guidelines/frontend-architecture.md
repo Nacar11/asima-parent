@@ -24,10 +24,16 @@ features/<slice>/    Vertical slices:
    ├─ format.ts /    Pure feature-local helpers.
    │  datetime.ts
    └─ components/     UI: *-page.tsx, drawers, dialogs, cells.
-components/          Shared cross-feature UI + shadcn primitives under ui/.
+components/          Shared cross-feature UI: shadcn primitives under ui/, plus
+                     promoted cross-feature pieces — form/field (the <Field>
+                     label+error wrapper), pagination, and form-drawer (the
+                     Sheet/Dialog shell).
 lib/                 api-client (single HTTP entry; token+refresh injected at
-                     runtime by AuthProvider), query-client, env, cn, tz,
-                     request-id. Never imports from features.
+                     runtime by AuthProvider), query-client, api-error
+                     (errorMessage/firstFieldError/fieldErrors for the backend
+                     error envelope), use-pagination, format (the single
+                     tz-aware render path), env, cn, tz, request-id. Never
+                     imports from features.
 ```
 
 ## 2. The decision: harden FSD; don't mirror the backend's layering
@@ -76,7 +82,10 @@ No Redux/Zustand — do not add a global store without an ADR.
 
 ## 5. Migration status
 
-These rules are being adopted incrementally; the plan and progress live in
-`asima-frontend/docs/plans/2026-06-14-frontend-architecture-hardening.md` and
-`asima-frontend/tasks/`. New code must comply; existing code is migrated
-phase by phase.
+These rules are essentially fully adopted: every slice routes server-state
+through `hooks/` (no inline `useMutation` in components), uses a `keys.ts`
+factory, and exposes an `index.ts` barrel; the shared primitives listed in §1
+(`api-error`, `Field`, `usePagination`/`Pagination`, `FormDrawer`) are in place.
+The reuse/readability pass that promoted them is recorded in
+`asima-parent/docs/plans/2026-06-19-frontend-reuse-readability-optimization.md`
+(working files in the gitignored `asima-frontend/tasks/`). New code must comply.

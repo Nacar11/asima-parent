@@ -242,6 +242,22 @@ explode a Dialog into seven files.
 - Feature compositions: name them for the thing they do, not the
   primitive they wrap. `CreateUserDrawer`, not `UserDialogContainer`.
 
+**Already-promoted shared primitives — reuse, don't re-roll.** These cross-
+feature pieces already exist; a new form / drawer / list MUST use them instead
+of re-deriving the same logic locally (re-rolling re-introduces the duplication
+the 2026-06-19 reuse pass removed):
+
+- `@/components/form/field` — the `<Field label error htmlFor>` wrapper; the one
+  source for a labeled field with inline error text.
+- `@/components/form-drawer` — the Sheet/Dialog shell (title, body, submit/cancel
+  footer, pending state). Use for new drawers unless the layout is genuinely bespoke.
+- `@/components/pagination` + `@/lib/use-pagination` — the page cursor + prev/next
+  controls for the `{ data, total, has_more }` list contract.
+- `@/lib/api-error` — `errorMessage` / `firstFieldError` / `fieldErrors` for the
+  backend `{ status, errors?, message? }` envelope. Never re-cast `err.body` inline.
+- `@/lib/format` — the tz-aware render path (`formatDateInTz`, `formatTimeInTz`,
+  `formatRelative`, …). Never call `date-fns.format()` / `toLocaleString()` directly.
+
 ---
 
 ## Forbidden imports (cheat sheet)
