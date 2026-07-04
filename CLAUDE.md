@@ -14,12 +14,13 @@ directory.
 ```
 asima-parent/
 ├── asima-backend/   # NestJS + TypeORM + Postgres API. See its own CLAUDE.md.
-└── asima-frontend/  # not yet scaffolded
+└── asima-frontend/  # Next.js 15 App Router SPA, Feature-Sliced Design (12 slices). See its own CLAUDE.md.
 ```
 
-When asked to work on the frontend before it exists, scaffold it as a
-sibling to `asima-backend/` and add a matching `asima-frontend/CLAUDE.md`.
-Don't grow frontend code inside the backend tree.
+Both apps are scaffolded and sit as siblings under this parent; each has its
+own `CLAUDE.md` that loads automatically when working under that directory.
+Keep them separated: don't grow frontend code inside the backend tree, or
+backend code inside the frontend tree.
 
 ## Cross-cutting concepts (read before touching auth, users, or approvals)
 
