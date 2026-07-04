@@ -90,7 +90,8 @@ follows this contract on both sides of the wire:
 - Every response carries `X-Request-ID`. Propagate it from frontend logs and
   any onward HTTP calls so requests can be correlated.
 - Bearer JWT auth. Access token 15m, refresh token 7d with rotation on
-  `/auth/refresh`. Logout is stateless (client drops tokens).
+  `/auth/refresh`. Refresh tokens are revocable server-side; logout revokes
+  all of the caller's refresh tokens (ADR 0002).
 
 ## Plans and todos — `tasks/` vs `docs/plans/`
 
