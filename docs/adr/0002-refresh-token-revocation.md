@@ -2,7 +2,9 @@
 
 - **Status:** Accepted (2026-07-04). Supersedes the v0 "stateless, no revocation"
   posture recorded in `asima-backend/CLAUDE.md`.
-- **Date:** 2026-07-04
+- **Date:** 2026-07-04. **Amended same day** (post-review): reuse of a revoked
+  token now revokes the user's whole token family (was: plain 401), and the
+  opportunistic prune is wired to run on login (was: method with no caller).
 - **Deciders:** Asima core
 
 ## Context
@@ -38,14 +40,21 @@ against it.
    persisted.
 4. **Rotation invalidates the presented token, atomically.** `POST /auth/refresh`
    performs a conditional `UPDATE … SET revoked_at = now() WHERE jti = :jti AND
-   revoked_at IS NULL`. If it affects 0 rows the token was already used or
-   revoked → **401** (this also detects refresh-token reuse). On success a new
-   `jti` row is issued. The `JwtRefreshStrategy` additionally rejects a
-   revoked/expired `jti` at the guard (defense-in-depth).
-5. **Logout revokes ALL of a user's refresh tokens (revoke-all / multi-device).**
+   revoked_at IS NULL`. On success a new `jti` row is issued.
+5. **Reuse of a revoked token revokes the whole family.** Presenting a `jti`
+   whose row is already revoked means the one-time rotation contract was broken
+   — theft or replay — and we cannot tell whether the attacker or the victim
+   holds the *current* token. Response (per OWASP token-rotation guidance):
+   revoke **every** refresh token of that user, then 401. Detection lives in two
+   places: the `JwtRefreshStrategy` guard (the common replay path — a revoked
+   row presented again) and the rotation's conditional UPDATE affecting 0 rows
+   (the concurrent race path). Benign rejections — an *expired* row or an
+   *unknown* `jti` (pre-ledger token, pruned row) — get a plain 401 with no
+   family revocation, so natural expiry never logs out other devices.
+6. **Logout revokes ALL of a user's refresh tokens (revoke-all / multi-device).**
    `POST /auth/logout` sets `revoked_at = now()` on every active row for
    `req.user.id`. Logging out kills every session/device.
-6. **The access token is unchanged.** A revoked session's access token still works
+7. **The access token is unchanged.** A revoked session's access token still works
    until its ≤15-minute natural expiry. A full access-token denylist stays out of
    scope; revocation targets the 7-day refresh window, which was the actual risk.
 
@@ -55,7 +64,11 @@ against it.
 
 - The 7-day refresh window is now **revocable**: logout and rotation both invalidate
   server-side. A stolen refresh token can be cut off before natural expiry.
-- Refresh-token **reuse is detected** (the atomic conditional revoke returns 0 rows).
+- Refresh-token **reuse is detected and punished**: the whole family is revoked, so
+  a thief who raced the victim to rotation still loses the stolen session. The
+  false-positive case (same token legitimately refreshed twice concurrently) is
+  mitigated client-side by the frontend's single-flight refresh mutex; a device
+  caught by it simply re-logs-in.
 
 **Costs / deviations**
 
@@ -64,8 +77,10 @@ against it.
   **infrastructure, not user-authored CRUD** — the acting subject *is* `user_id`.
   This mirrors the existing exception the codebase already makes for seed-managed
   `permissions`. Revocation is a hard `revoked_at` timestamp, not a soft delete.
-- **Expired-row pruning is opportunistic** (a `deleteExpired(now)` repo method), not
-  a scheduled job — acceptable for v0 volumes; a cron can be added later.
+- **Expired-row pruning runs opportunistically on every successful login**
+  (fire-and-forget `deleteExpired(now)`, backed by an index on `expires_at`), not
+  as a scheduled job — bounds the ledger to roughly the active refresh window;
+  a cron can replace it later if login frequency ever stops being enough.
 - **Residual access-token window:** up to 15 minutes after revocation. Documented and
   accepted.
 
