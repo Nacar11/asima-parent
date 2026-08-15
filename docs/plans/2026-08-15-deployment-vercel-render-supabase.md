@@ -163,7 +163,7 @@ pre-deploy command, whose availability varies by plan.
 # DATABASE_SSL_ENABLED=true, then:
 npm run migration:run
 npm run seed
-psql "$SUPABASE_URL" -c '\dt'          # 13 tables + migrations table
+psql "$SUPABASE_URL" -c '\dt'          # 14 tables + migrations ledger
 psql "$SUPABASE_URL" -c 'select count(*) from users'
 ```
 
@@ -443,13 +443,13 @@ equivalent.
 Reset sequence:
 
 ```
-1. TRUNCATE the 13 app tables (RESTART IDENTITY CASCADE) — explicit list
+1. TRUNCATE the 14 app tables (RESTART IDENTITY CASCADE) — explicit list
 2. Purge the leave-attachments/ prefix from the bucket
 3. npm run seed:prod  → users, roles, schedules, chains, demo leave
                         requests, and freshly uploaded placeholders
 ```
 
-Truncating all 13 (rather than only the transactional ones) also removes
+Truncating all 14 (rather than only the transactional ones) also removes
 users a visitor created through the admin UI, returning the demo to exactly
 its seeded state.
 
@@ -491,7 +491,7 @@ reset steps against Supabase on a schedule.
 **Acceptance criteria:**
 - [ ] Weekly cron (plus `workflow_dispatch` so it can be triggered by hand
       before a demo)
-- [ ] Truncates via an explicit 13-table list — never `schema:drop`
+- [ ] Truncates via an explicit 14-table list — never `schema:drop`
 - [ ] Runs the purge script, then `npm run seed:prod`
 - [ ] Supabase and storage credentials read from repository secrets, never
       committed
@@ -588,7 +588,7 @@ reset steps against Supabase on a schedule.
 | Seeded demo credentials are effectively public | Med | Use a demo-only password; never reuse a real one |
 | Render's 750 free instance-hours cover only one always-on service | Low | Do not add a second free always-on service |
 | A scheduled reset fires mid-demo and wipes what you just showed | Med | Weekly cadence at a quiet hour; run `workflow_dispatch` manually *before* a demo rather than relying on the schedule |
-| `db:fresh` / `schema:drop` pointed at Supabase would drop platform-owned schemas | **High** | Reset truncates an explicit 13-table list; `db:fresh` is never used against Supabase (Phase 5) |
+| `db:fresh` / `schema:drop` pointed at Supabase would drop platform-owned schemas | **High** | Reset truncates an explicit 14-table list; `db:fresh` is never used against Supabase (Phase 5) |
 | GitHub disables cron schedules after 60 days of repository inactivity | Low | Expected for a portfolio repo; check this first if resets stop |
 | Orphaned bucket objects accumulate across resets | Low | Purge script runs as reset step 2 (Task 5.1) |
 
@@ -611,7 +611,7 @@ reset steps against Supabase on a schedule.
 |---|---|---|
 | 2026-08-15 | Where does the NestJS API run? | Render free tier — Vercel's 4.5 MB payload cap is incompatible with the attachment proxy design (see Decision section) |
 | 2026-08-15 | Where do attachments live? | Supabase Storage over its S3-compatible endpoint — zero change to `S3Storage` |
-| 2026-08-15 | Reset demo data, or let it accumulate? | **Reset on a schedule** — truncate 13 tables + purge bucket + reseed (Phase 5) |
+| 2026-08-15 | Reset demo data, or let it accumulate? | **Reset on a schedule** — truncate 14 tables + purge bucket + reseed (Phase 5) |
 | 2026-08-15 | Is the ~1 min cold start acceptable? | **Yes** — stay on Render free; the keep-alive monitor should make it rare. Render Starter ($7/mo) stays the escape hatch |
 
 No open questions.
