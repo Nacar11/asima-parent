@@ -13,12 +13,15 @@ Deploy `asima-frontend` to Vercel, `asima-backend` to Render's free tier, and
 put both Postgres and object storage on Supabase. A free UptimeRobot monitor
 keeps the two idle timers from killing the demo.
 
-The deployment requires **no application code changes**. Every environment
-difference the app cares about is already expressed as an environment
-variable — `S3Storage` (`asima-backend/src/storage/s3-storage.service.ts`)
-has no `if (env)` branch, `main.ts:120` already binds `0.0.0.0`, and the
-build/start scripts Render needs (`build`, `start:prod`) already exist in
-`package.json`.
+Deploying requires **no application code changes** (Phases 0–4). Every
+environment difference the app cares about is already expressed as an
+environment variable — `S3Storage`
+(`asima-backend/src/storage/s3-storage.service.ts`) has no `if (env)` branch,
+`main.ts:120` already binds `0.0.0.0`, and the build/start scripts Render
+needs (`build`, `start:prod`) already exist in `package.json`.
+
+Phase 5 (scheduled demo-data reset) adds deployment *tooling* — a purge
+script and a workflow — but still changes nothing in the running app.
 
 ---
 
@@ -60,9 +63,12 @@ Secondary costs of the Vercel path, for the record:
 | Migrations | No release step | Run before deploy |
 | Code changes | Adapter + config + upload redesign | **None** |
 
-**Decision: Render free tier for the API.** Revisit only if the ~1 minute
-cold start becomes unacceptable during a live demo, in which case Render
-Starter ($7/mo) removes the spin-down with no other changes.
+**Decision: Render free tier for the API.** The ~1 minute cold start is
+accepted (decided 2026-08-15) — the UptimeRobot monitor in Phase 4 keeps the
+service warm in practice, so the wake penalty should only ever be paid if the
+monitor itself is down. Render Starter ($7/mo) remains the escape hatch if
+that turns out to be optimistic; it removes the spin-down with no other
+changes.
 
 ---
 
@@ -406,6 +412,122 @@ Supabase database activity.
 
 ---
 
+## Phase 5: Scheduled demo-data reset
+
+Decided 2026-08-15: demo data resets on a schedule rather than accumulating
+whatever visitors click into existence.
+
+**This phase is the one exception to "no application code changes."** It adds
+deployment tooling — a workflow and a purge script — but changes nothing in
+the running app.
+
+### How reset works, and why not `db:fresh`
+
+Two facts from the codebase determine the design:
+
+1. **Every seed service is insert-if-missing.** `user-seed.service.ts:84`,
+   `time-entry-seed.service.ts:45`, and `leave-request-seed.service.ts:110`
+   all skip rows that already exist. Re-running `seed` on a dirty database
+   therefore does nothing — a reset *must* clear data first.
+2. **The seed uploads its own attachments.** `leave-request-seed.service.ts:124`
+   calls `uploadPlaceholder(...)` for employees whose rows need one, and only
+   when those rows are missing. Purging the bucket is therefore safe: the
+   next seed re-uploads what it needs.
+
+**`db:fresh` must never be used against Supabase.** It runs `schema:drop`
+first, which is not scoped to this app's tables — on Supabase the same
+database also holds the `auth`, `storage`, and `realtime` schemas that the
+platform itself owns. Truncating an explicit table list is the safe
+equivalent.
+
+Reset sequence:
+
+```
+1. TRUNCATE the 13 app tables (RESTART IDENTITY CASCADE) — explicit list
+2. Purge the leave-attachments/ prefix from the bucket
+3. npm run seed:prod  → users, roles, schedules, chains, demo leave
+                        requests, and freshly uploaded placeholders
+```
+
+Truncating all 13 (rather than only the transactional ones) also removes
+users a visitor created through the admin UI, returning the demo to exactly
+its seeded state.
+
+---
+
+### Task 5.1: Add the bucket purge script
+
+**Description:** A small script that deletes every object under the
+`leave-attachments/` prefix, so orphaned renditions don't accumulate against
+the 1 GB free-tier ceiling across resets.
+
+**Acceptance criteria:**
+- [ ] Script lists and deletes all objects under `LEAVE_ATTACHMENT_PREFIX`
+- [ ] Reuses the existing `@aws-sdk/client-s3` dependency and `STORAGE_*`
+      config — no new dependency, no second storage code path
+- [ ] Refuses to run unless `STORAGE_BUCKET` is set explicitly (guards
+      against pointing it at the wrong bucket)
+- [ ] Exposed as an npm script alongside the existing `seed` scripts
+
+**Verification:**
+- [ ] Run against a local MinIO bucket with objects present → bucket empty
+- [ ] Run against an already-empty bucket → exits 0, no error
+
+**Dependencies:** 3.1
+**Files likely touched:**
+- `asima-backend/src/database/seeds/` (new purge script — the seeds directory
+  is where reset tooling belongs)
+- `asima-backend/package.json` (one script entry)
+
+**Scope:** S (1–2 files)
+
+---
+
+### Task 5.2: Add the scheduled reset workflow
+
+**Description:** A GitHub Actions cron in `asima-backend` that runs the three
+reset steps against Supabase on a schedule.
+
+**Acceptance criteria:**
+- [ ] Weekly cron (plus `workflow_dispatch` so it can be triggered by hand
+      before a demo)
+- [ ] Truncates via an explicit 13-table list — never `schema:drop`
+- [ ] Runs the purge script, then `npm run seed:prod`
+- [ ] Supabase and storage credentials read from repository secrets, never
+      committed
+- [ ] Logs the row counts before and after so a failed reset is visible
+
+**Verification:**
+- [ ] Trigger manually via `workflow_dispatch`; run is green
+- [ ] Create a leave request in the demo, run the workflow, confirm it is
+      gone and the seeded demo data is back
+- [ ] Confirm the bucket holds only freshly uploaded placeholders
+- [ ] Confirm login still works with `SEED_DEFAULT_PASSWORD`
+
+**Dependencies:** 5.1, 4.1
+**Files likely touched:**
+- `asima-backend/.github/workflows/` (new workflow)
+
+**Scope:** S (1 file)
+
+> **GitHub Actions cron caveats:** scheduled workflows are best-effort and can
+> be delayed by many minutes under load, and GitHub disables schedules in
+> repositories with no activity for 60 days. Neither matters much for a demo
+> reset — but if the schedule ever goes quiet, repository inactivity is the
+> first thing to check.
+
+---
+
+### ✅ Checkpoint: Reset works
+
+- [ ] Manual `workflow_dispatch` run completes green
+- [ ] Demo returns to seeded state: visitor-created leave requests, time
+      entries, and users all gone
+- [ ] Attachments render after reset (placeholders re-uploaded)
+- [ ] Login works with the demo credentials
+
+---
+
 ## Environment variable reference
 
 ### Backend — Render
@@ -465,6 +587,10 @@ Supabase database activity.
 | Vercel Hobby is non-commercial only | Low | A portfolio qualifies |
 | Seeded demo credentials are effectively public | Med | Use a demo-only password; never reuse a real one |
 | Render's 750 free instance-hours cover only one always-on service | Low | Do not add a second free always-on service |
+| A scheduled reset fires mid-demo and wipes what you just showed | Med | Weekly cadence at a quiet hour; run `workflow_dispatch` manually *before* a demo rather than relying on the schedule |
+| `db:fresh` / `schema:drop` pointed at Supabase would drop platform-owned schemas | **High** | Reset truncates an explicit 13-table list; `db:fresh` is never used against Supabase (Phase 5) |
+| GitHub disables cron schedules after 60 days of repository inactivity | Low | Expected for a portfolio repo; check this first if resets stop |
+| Orphaned bucket objects accumulate across resets | Low | Purge script runs as reset step 2 (Task 5.1) |
 
 ---
 
@@ -479,12 +605,16 @@ Supabase database activity.
 
 ---
 
-## Open questions
+## Decisions log
 
-- Should demo data reset on a schedule, or persist as users click around and
-  dirty it?
-- Is the ~1 minute cold start acceptable for live interview demos, or is
-  Render Starter ($7/mo) worth it for peace of mind?
+| Date | Question | Decision |
+|---|---|---|
+| 2026-08-15 | Where does the NestJS API run? | Render free tier — Vercel's 4.5 MB payload cap is incompatible with the attachment proxy design (see Decision section) |
+| 2026-08-15 | Where do attachments live? | Supabase Storage over its S3-compatible endpoint — zero change to `S3Storage` |
+| 2026-08-15 | Reset demo data, or let it accumulate? | **Reset on a schedule** — truncate 13 tables + purge bucket + reseed (Phase 5) |
+| 2026-08-15 | Is the ~1 min cold start acceptable? | **Yes** — stay on Render free; the keep-alive monitor should make it rare. Render Starter ($7/mo) stays the escape hatch |
+
+No open questions.
 
 ---
 
