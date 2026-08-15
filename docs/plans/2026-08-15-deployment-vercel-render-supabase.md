@@ -3,7 +3,9 @@
 **Date:** 2026-08-15
 **Scope:** First public deployment of all three repos, targeting a $0/month
 portfolio demo — not production.
-**Status:** Planned.
+**Status:** Phase 5 implemented (`asima-backend` 487f5a6) and rehearsed
+end-to-end against local Postgres + MinIO. Phases 0–4 are dashboard work,
+pending account setup.
 
 ---
 
