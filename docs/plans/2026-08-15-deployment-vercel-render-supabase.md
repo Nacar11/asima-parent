@@ -3,9 +3,12 @@
 **Date:** 2026-08-15
 **Scope:** First public deployment of all three repos, targeting a $0/month
 portfolio demo — not production.
-**Status:** Phase 5 implemented (`asima-backend` 487f5a6) and rehearsed
-end-to-end against local Postgres + MinIO. Phases 0–4 are dashboard work,
-pending account setup.
+**Status:** **Phase 0 complete.** Supabase project `rvdttajuhpltsgrrxrjp` is
+live in `ap-southeast-1` (Singapore, Postgres 17.6) with the Data API disabled,
+all 14 migrations applied, the demo data seeded to counts identical to the local
+rehearsal (`32/6/43/116/11/93/93`), and a private `asima` bucket holding the 33
+attachment objects. Phase 5 is implemented (`asima-backend` 487f5a6) and
+rehearsed. Phases 1–4 (Render, Vercel, attachments, keep-alive) are next.
 
 **Pre-flight (done):** the production artifacts for Phases 1–2 were rehearsed
 locally — production-mode backend boot (`APP_PORT` correctly beats Render's
