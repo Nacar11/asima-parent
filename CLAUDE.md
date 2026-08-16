@@ -169,8 +169,42 @@ snapshot solves that — it's what we agreed to do at the start; the
 - `asima-parent/docs/universal-guidelines/ci-cd-and-quality-gates.md` —
   the CI workflows + Husky pre-push hooks across all three repos: what's
   enforced where, the standard stack, CI secrets handling, and recipes.
+- `asima-parent/docs/universal-guidelines/deployment-and-production-stack.md`
+  — the live demo's hosting, env vars, deploy runbook, demo-data reset, and
+  the deployment gotchas we hit for real. Read before touching anything
+  deployment-related.
 - `asima-backend/reference/` — exemplar code (categories module) used as a
   pattern reference. Not shipping code; don't import from it.
+
+## Production deployment
+
+The demo is live. Full runbook:
+`docs/universal-guidelines/deployment-and-production-stack.md`.
+
+| Layer | Host | Region |
+|---|---|---|
+| Frontend | Vercel — `asima-frontend-tawny.vercel.app` | edge |
+| Backend | Render Free — `asima-backend-1.onrender.com` | Singapore |
+| Database + storage | Supabase Free (`rvdttajuhpltsgrrxrjp`) | `ap-southeast-1` |
+
+Backend and database share a region on purpose; a cross-region split costs
+50–60 ms *per query*, and neither host can move a service after creation.
+
+**Rules you must not get wrong:**
+
+- ⚠️ **NEVER run `db:fresh` / `schema:drop` against Supabase.** `schema:drop`
+  is not scoped to app tables, and that database also holds Supabase's own
+  `auth`, `storage`, `realtime`, and `vault` schemas. Reset the demo with the
+  14-table truncate in `asima-backend/.github/workflows/demo-reset.yml`.
+- **The attachment bucket stays private.** Attachments are medical
+  certificates; every byte crosses an authenticated endpoint. Don't move to
+  client-direct presigned uploads or wire storage credentials into the
+  frontend — S3 keys bypass RLS and are server-only.
+- **Production credentials are never committed.** They live in the gitignored
+  `asima-backend/.env.supabase.prod`; `.env` stays pointed at local
+  Postgres + MinIO.
+- **`THROTTLE_DISABLED` must never be set in production** — it exists for
+  e2e and CI only.
 
 ## Working style
 
