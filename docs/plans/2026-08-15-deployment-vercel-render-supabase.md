@@ -3,7 +3,18 @@
 **Date:** 2026-08-15
 **Scope:** First public deployment of all three repos, targeting a $0/month
 portfolio demo — not production.
-**Status:** **Phases 0 and 1 complete.** Supabase project
+**Status:** **Phases 0–3 complete — the demo is live and working end to end**
+at `https://asima-frontend-tawny.vercel.app` (login
+`admin@asima.inc` / `Asima@1234`). Verified in production: browser-shaped
+login across origins, refresh-token rotation with reuse correctly revoked
+(ADR 0002), a 3.6 MB attachment upload rendering all three variants in 6.6 s,
+an over-cap file rejected with a clean 422, and no OOM restart afterwards.
+**Only Phase 4 (UptimeRobot keep-alive) and the Phase 5 `workflow_dispatch`
+rehearsal remain.**
+
+Earlier detail:
+
+**Phases 0 and 1 complete.** Supabase project
 `rvdttajuhpltsgrrxrjp` is live in `ap-southeast-1` (Singapore, Postgres 17.6)
 with the Data API disabled, all 14 migrations applied, demo data seeded to
 counts identical to the local rehearsal (`32/6/43/116/11/93/93`), and a private
