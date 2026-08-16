@@ -3,12 +3,21 @@
 **Date:** 2026-08-15
 **Scope:** First public deployment of all three repos, targeting a $0/month
 portfolio demo — not production.
-**Status:** **Phase 0 complete.** Supabase project `rvdttajuhpltsgrrxrjp` is
-live in `ap-southeast-1` (Singapore, Postgres 17.6) with the Data API disabled,
-all 14 migrations applied, the demo data seeded to counts identical to the local
-rehearsal (`32/6/43/116/11/93/93`), and a private `asima` bucket holding the 33
-attachment objects. Phase 5 is implemented (`asima-backend` 487f5a6) and
-rehearsed. Phases 1–4 (Render, Vercel, attachments, keep-alive) are next.
+**Status:** **Phases 0 and 1 complete.** Supabase project
+`rvdttajuhpltsgrrxrjp` is live in `ap-southeast-1` (Singapore, Postgres 17.6)
+with the Data API disabled, all 14 migrations applied, demo data seeded to
+counts identical to the local rehearsal (`32/6/43/116/11/93/93`), and a private
+`asima` bucket holding the 33 attachment objects. The API is live at
+**`https://asima-backend-1.onrender.com`** (Render Free, Singapore) and passes
+every Phase 1 checkpoint including login against Supabase, with 25/25 requests
+succeeding. Phase 5 is implemented (`asima-backend` 487f5a6) and rehearsed.
+Phases 2–4 (Vercel, attachments, keep-alive) are next.
+
+**Two Render gotchas, recorded in Phase 1 below:** `NODE_ENV=production` makes
+npm omit devDependencies (so the build command needs `--include=dev`, or both
+`husky` and `nest` go missing), and a leftover duplicate service makes Render's
+router flap between the live instance and a dead one — ~50% of requests 404 with
+`x-render-routing: no-server` while never reaching the container.
 
 **Pre-flight (done):** the production artifacts for Phases 1–2 were rehearsed
 locally — production-mode backend boot (`APP_PORT` correctly beats Render's
