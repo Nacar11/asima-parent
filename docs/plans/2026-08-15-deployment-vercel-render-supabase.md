@@ -7,6 +7,15 @@ portfolio demo — not production.
 end-to-end against local Postgres + MinIO. Phases 0–4 are dashboard work,
 pending account setup.
 
+**Pre-flight (done):** the production artifacts for Phases 1–2 were rehearsed
+locally — production-mode backend boot (`APP_PORT` correctly beats Render's
+injected `PORT`; health, auth, and a 404 on `/docs` all as specified), CORS
+allow-list probing, and a Vercel-style frontend build (18/18 routes static).
+Two findings are folded in below: the **trailing-slash CORS trap** (Phase 2.3)
+and a silent-failure landmine fixed in `asima-frontend` d40bf42 — a production
+build with `NEXT_PUBLIC_API_BASE_URL` unset used to succeed while baking
+`http://localhost:3000/api/v1` into the client bundle; it now fails the build.
+
 ---
 
 ## Overview
@@ -282,6 +291,18 @@ needed.
 **Verification:**
 - [ ] Browser devtools shows API calls going to the Render host, not localhost
 
+> Both are `NEXT_PUBLIC_*`, so they are **baked at build time** — changing
+> either requires a redeploy, not just a restart. Make sure
+> `NEXT_PUBLIC_API_BASE_URL` is enabled for the environment being built
+> (setting it for Production only leaves Preview builds without it).
+>
+> Since `asima-frontend` d40bf42 a production build **fails** when it is
+> missing or malformed. Before that fix the build succeeded and shipped a
+> `http://localhost:3000/api/v1` fallback to the browser, which points at the
+> *visitor's* machine — a green deploy where nothing works. If the Vercel
+> build fails with "NEXT_PUBLIC_API_BASE_URL is required", that guard is
+> doing its job: set the variable and redeploy.
+
 **Dependencies:** 1.2, 2.1
 **Scope:** XS (no files)
 
@@ -312,6 +333,14 @@ URL, which does not exist until the frontend deploys. Resolve it here.
 > **no wildcards**. Vercel preview deployments get random hostnames that will
 > therefore fail CORS. Either accept that only production works, or add
 > specific preview URLs as needed.
+>
+> **Verified locally against a production-mode boot.** Only the exactly
+> configured origin received an `Access-Control-Allow-Origin` header. Blocked:
+> preview hostnames, the `http://` variant, unrelated origins — **and the same
+> URL with a trailing slash**. That last one is the trap: Vercel's dashboard
+> displays the deployment URL *with* a trailing slash, so pasting it verbatim
+> here produces a green deploy where every login fails CORS. Enter the origin
+> with no trailing slash and no path.
 
 ---
 
